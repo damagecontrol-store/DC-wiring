@@ -100,3 +100,13 @@
 .dcw-smark text { fill: var(--text-muted); font-size: 10px; }
 .dcw-smark.is-lit rect { fill: var(--interactive-accent); stroke: var(--interactive-accent); }
 .dcw-smark { pointer-events: none; }
+/* parts */
+.dcw-search { margin: 6px 8px; width: calc(100% - 16px); }
+.dcw-table th.dcw-sortable { cursor: pointer; }
+.dcw-table tr.is-excluded td, .dcw-table tr.is-excluded input { color: var(--text-faint); text-decoration: line-through; }
+.dcw-warn { color: var(--text-warning); font-size: var(--font-ui-smaller); }
+.dcw-warnings { color: var(--text-warning); padding: 6px 10px; font-size: var(--font-ui-small); }
+.dcw-libs { white-space: nowrap; font-size: var(--font-ui-smaller); }
+.dcw-libs > * { margin-right: 4px; }
+.dcw-row-actions { white-space: nowrap; }
+.dcw-config-item { padding-left: 16px; }

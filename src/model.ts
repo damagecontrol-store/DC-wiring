@@ -1,6 +1,9 @@
 // Harness document model. Stored as pretty JSON in a .harness file.
 import { wireLength } from "./bundles.ts";
 
+import { loadedParts, effectiveWire } from "./parts.ts";
+import type { GaugeUnit, LengthUnit } from "./units.ts";
+
 export type Kind = "connector" | "splice" | "harness" | "cable"; // harness = sub-harness block
 
 export interface Component {
@@ -21,6 +24,7 @@ export interface Component {
 	shield?: boolean; // cable: pin 0 is the shield, so adding cores never renumbers it
 	length?: number; // cable: mm, counted in the BOM as metres
 	pos?: { x: number; y: number }; // centre on the Layout view; unset = its schematic x, y
+	config?: string; // name of the part's configuration in use; the part's first one when unset
 }
 
 export interface Core { color: string; gauge: string }
@@ -52,6 +56,40 @@ export interface Part {
 	manufacturer: string;
 	description: string;
 	price: number; // per piece, or per metre for wire parts
+	type?: PartType; // unset: generic part from before typed parts
+	internalNumber?: string;
+	url?: string;
+	colour?: string; // housing, insulation, or contact plating
+	excludeFromBom?: boolean;
+	// type-specific, see PART_TYPES in parts.ts for which type uses which
+	cavities?: number;
+	gender?: string; // connector: male/female, contact: pin/socket
+	shell?: boolean;
+	gauge?: string; // wire; plain number is in the harness gauge unit
+	stripe?: string;
+	insulation?: number; // mm
+	diameter?: number; // mm
+	cores?: number;
+	shield?: boolean;
+	terminalType?: string;
+	size?: string; // terminal stud or tab size
+	contactType?: string; // crimp/solder/other
+	gaugeMin?: string; // contact / terminal / splice wire range
+	gaugeMax?: string;
+	coveringType?: string;
+	cutToLength?: boolean;
+	length?: number; // mm, fixed-length covering
+	value?: string; // resistor ohms, diode rating
+	configurations?: Configuration[];
+}
+
+export type PartType = "connector" | "wire" | "cable" | "terminal" | "splice" | "diode" | "resistor" | "covering" | "contact"
+	| "cavity-plug" | "cavity-seal" | "lock" | "dust-cover" | "boot" | "backshell" | "mount" | "group" | "other";
+
+/** A named list of accessory parts that come with every component using the part. */
+export interface Configuration {
+	name: string;
+	items: { partId: string; apply?: "connected" | "unconnected" | "never" }[]; // apply: contacts, plugs and seals only
 }
 
 /** A run of wires on the Layout view, between two components or branch points. */
@@ -71,6 +109,9 @@ export interface Harness {
 	components: Component[];
 	wires: Wire[];
 	parts: Part[];
+	currency?: string; // symbol shown with prices
+	lengthUnit?: LengthUnit;
+	gaugeUnit?: GaugeUnit; // unit of gauges typed as a plain number; mm² when unset
 	hideWireIds?: boolean; // canvas: don't label unnamed wires with their id
 	bundles?: Bundle[];
 	branchPoints?: BranchPoint[];
@@ -178,18 +219,21 @@ export function signalOf(h: Harness, e: End, nets = computeNets(h)): string | un
 		if (s && nets.get(`${c.id}:${p}`) === net) return s;
 }
 
-export interface BomRow { part: Part; qty: number; unit: string; total: number; used: boolean }
+export interface BomRow { part: Part; qty: number; unit: string; total: number; used: boolean; excluded?: boolean }
 
-/** Bill of materials: pieces for components, metres for wires. */
+/** Bill of materials: pieces for components and their configuration accessories, metres for wires. Excluded parts are flagged, not dropped. */
 export function bom(h: Harness): BomRow[] {
+	const acc = new Map<string, number>();
+	for (const c of h.components) for (const l of loadedParts(h, c)) acc.set(l.partId, (acc.get(l.partId) ?? 0) + 1);
 	return h.parts.map(part => {
-		const comps = h.components.filter(c => c.partId === part.id && c.kind !== "cable").length + (h.groups ?? []).filter(g => g.partId === part.id).length;
+		const comps = h.components.filter(c => c.partId === part.id && c.kind !== "cable").length + (h.groups ?? []).filter(g => g.partId === part.id).length + (acc.get(part.id) ?? 0);
 		const mm = h.wires.filter(w => w.partId === part.id).reduce((s, w) => s + wireLength(h, w), 0)
 			+ h.components.filter(c => c.kind === "cable" && c.partId === part.id).reduce((s, c) => s + (c.length || 0), 0);
 		const onWires = h.wires.some(w => w.partId === part.id) || h.components.some(c => c.kind === "cable" && c.partId === part.id);
-		const isWire = mm > 0 || (comps === 0 && onWires);
+		const t = part.type;
+		const isWire = t ? t === "wire" || t === "cable" || (t === "covering" && !!part.cutToLength) : mm > 0 || (comps === 0 && onWires);
 		const qty = isWire ? mm / 1000 : comps;
-		return { part, qty, unit: isWire ? "m" : "pcs", total: qty * (part.price || 0), used: comps > 0 || onWires };
+		return { part, qty, unit: isWire ? "m" : "pcs", total: qty * (part.price || 0), used: comps > 0 || onWires, excluded: !!part.excludeFromBom };
 	});
 }
 
@@ -203,6 +247,7 @@ export function removeComponent(h: Harness, id: string) {
 export function removePart(h: Harness, id: string) {
 	h.parts = h.parts.filter(p => p.id !== id);
 	for (const x of [...h.components, ...h.wires, ...h.groups ?? []]) if (x.partId === id) delete x.partId;
+	for (const p of h.parts) for (const cf of p.configurations ?? []) cf.items = cf.items.filter(i => i.partId !== id);
 }
 
 // --- Sub-harnesses ---
@@ -249,7 +294,7 @@ export function subBom(h: Harness, load: (path: string) => Harness | undefined, 
 		if (c.kind !== "harness" || !c.file || seen.has(c.file)) continue;
 		const sub = load(c.file);
 		if (!sub) continue;
-		for (const r of [...bom(sub), ...subBom(sub, load, new Set([...seen, c.file]))]) if (r.qty) add(r);
+		for (const r of [...bom(sub), ...subBom(sub, load, new Set([...seen, c.file]))]) if (r.qty && !r.excluded) add(r);
 	}
 	return [...merged.values()];
 }
@@ -257,7 +302,7 @@ export function subBom(h: Harness, load: (path: string) => Harness | undefined, 
 /** Text drawn on a wire: its name (or id unless hidden), then its gauge. */
 export function wireLabel(h: Harness, w: Wire): string {
 	const name = w.name || (h.hideWireIds ? "" : w.id);
-	return [name, w.gauge].filter(Boolean).join(" ");
+	return [name, effectiveWire(h, w).gauge].filter(Boolean).join(" ");
 }
 
 /** Points sub-harness blocks at a renamed file. Returns true if anything changed. */
