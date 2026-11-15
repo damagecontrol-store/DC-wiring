@@ -1,5 +1,6 @@
 import { FuzzySuggestModal, Notice, TextFileView, TFile, type App, type WorkspaceLeaf } from "obsidian";
 import { bom, emptyHarness, formatPins, nextId, parseHarness, parsePins, relinkSub, removeComponent, removePart, signalOf, subBom, syncPorts, type BomRow, type Component, type End, type Harness } from "./model.ts";
+import { exportMenu } from "./output.ts";
 import { Schematic, type Host, type Selection } from "./schematic.ts";
 import { FormModal, freePath, type Field } from "./ui.ts";
 
@@ -266,6 +267,7 @@ export class HarnessView extends TextFileView implements Host {
 				this.changed();
 			};
 		}
+		actions.createEl("button", { text: "Export" }).onclick = e => exportMenu(this, e);
 		if (this.parents.length) {
 			const up = actions.createSpan({ cls: "dcw-parents", text: "Part of: " });
 			this.parents.forEach((f, i) => {
