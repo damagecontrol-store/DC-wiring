@@ -9,6 +9,16 @@ export default class DCWiringPlugin extends Plugin {
 		this.registerExtensions(["harness"], VIEW_TYPE);
 		this.addRibbonIcon("cable", "New harness", () => this.create());
 		this.addCommand({ id: "new-harness", name: "New harness", callback: () => this.create() });
+		this.addCommand({
+			id: "open-layout-beside", name: "Open layout beside schematic", checkCallback: checking => {
+				const view = this.app.workspace.getActiveViewOfType(HarnessView);
+				if (!view?.file || checking) return !!view?.file;
+				const file = view.file;
+				view.showTab("schematic");
+				const leaf = this.app.workspace.getLeaf("split", "vertical");
+				void leaf.openFile(file).then(() => (leaf.view as HarnessView).showTab("layout"));
+			},
+		});
 		// keep sub-harness links working when a .harness file is renamed or moved
 		this.registerEvent(this.app.vault.on("rename", async (file, oldPath) => {
 			if (!(file instanceof TFile) || file.extension !== "harness") return;

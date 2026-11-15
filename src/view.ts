@@ -1,19 +1,25 @@
 import { FuzzySuggestModal, Notice, TextFileView, TFile, type App, type WorkspaceLeaf } from "obsidian";
-import { bom, emptyHarness, formatPins, nextId, parseHarness, parsePins, relinkSub, removeComponent, removePart, signalOf, subBom, syncPorts, type BomRow, type Component, type End, type Harness } from "./model.ts";
+import { routeWires } from "./bundles.ts";
+import { Layout, type LayoutSel } from "./layout.ts";
+import { formatLength, parseLength } from "./length.ts";
+import { bom, emptyHarness, formatPins, nextId, parseHarness, parsePins, relinkSub, removeComponent, removePart, signalOf, subBom, syncPorts, type BomRow, type Bundle, type Component, type End, type Harness } from "./model.ts";
 import { Schematic, type Host, type Selection } from "./schematic.ts";
 import { FormModal, freePath, type Field } from "./ui.ts";
 
 export const VIEW_TYPE = "dc-wiring-harness";
-type Tab = "schematic" | "connections" | "parts";
+type Tab = "schematic" | "layout" | "connections" | "parts";
 
 export class HarnessView extends TextFileView implements Host {
 	h: Harness = emptyHarness();
 	sel: Selection = null;
+	lsel: LayoutSel = null; // bundle or branch point picked on the Layout tab
 	subs = new Map<string, Harness>();
 	private parents: TFile[] = []; // harnesses that use this one as a sub-harness
 	private tab: Tab = "schematic";
 	private broken: string | null = null; // text of a file that failed to parse: saved back untouched
 	private schematic = new Schematic(this);
+	private layout = new Layout(this);
+	private layoutFitted = false;
 	private bar!: HTMLElement;
 	private body!: HTMLElement;
 	private fitted = false;
@@ -38,7 +44,7 @@ export class HarnessView extends TextFileView implements Host {
 		}
 		this.history = [this.getViewData()]; // a new or externally changed file starts a fresh undo list
 		// fit when a file opens with content; an empty one stays at 100% while you add the first parts
-		if (clear) { this.sel = null; this.fitted = !this.h.components.length; }
+		if (clear) { this.sel = this.lsel = null; this.fitted = this.layoutFitted = !this.h.components.length; }
 		this.render();
 		void this.loadLinks();
 	}
@@ -100,13 +106,14 @@ export class HarnessView extends TextFileView implements Host {
 		}).open();
 	}
 
-	clear() { this.h = emptyHarness(); this.sel = null; }
+	clear() { this.h = emptyHarness(); this.sel = this.lsel = null; }
 
 	// A harness opened in a background tab has no size yet: fit once it is shown.
 	onResize() { this.fitInitially(); }
 
 	private fitInitially() {
 		if (!this.fitted && this.tab === "schematic") this.fitted = this.schematic.fit();
+		if (!this.layoutFitted && this.tab === "layout") this.layoutFitted = this.layout.fit();
 	}
 
 	async onOpen() {
@@ -126,6 +133,7 @@ export class HarnessView extends TextFileView implements Host {
 			if ((e.target as HTMLElement).closest("input, select, textarea")) return;
 			// delete only where the selection is visible
 			if ((e.key === "Delete" || e.key === "Backspace") && this.tab === "schematic") this.deleteSelection();
+			if ((e.key === "Delete" || e.key === "Backspace") && this.tab === "layout" && this.lsel) this.layout.remove(this.lsel);
 			if (e.key === "Escape") this.select(null);
 			if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); this.undo(); }
 		});
@@ -133,10 +141,30 @@ export class HarnessView extends TextFileView implements Host {
 
 	// --- Host ---
 	select(sel: Selection) {
-		if (JSON.stringify(sel) === JSON.stringify(this.sel)) return; // same selection: keep DOM so double-clicks land
+		if (JSON.stringify(sel) === JSON.stringify(this.sel) && !this.lsel) return; // same selection: keep DOM so double-clicks land
 		this.sel = sel;
+		this.lsel = null;
 		this.render();
+		for (const v of this.siblings()) { v.sel = sel; v.lsel = null; v.render(); }
 	}
+
+	/** Picks a bundle or branch point; a bundle also selects the wires routed through it, for the other tabs. */
+	selectLayout(s: LayoutSel) {
+		if (JSON.stringify(s) === JSON.stringify(this.lsel)) return;
+		const wires = s?.bundle ? [...routeWires(this.h)].filter(([, r]) => r.bundles.includes(s.bundle!)).map(([id]) => id) : [];
+		this.sel = wires.length ? { wires } : null;
+		this.lsel = s;
+		this.render();
+		for (const v of this.siblings()) { v.sel = this.sel; v.lsel = s; v.render(); }
+	}
+
+	/** Other open views of this file (split screen): they share edits and selection with this one. */
+	private siblings(): HarnessView[] {
+		return this.app.workspace.getLeavesOfType(VIEW_TYPE).map(l => l.view)
+			.filter((v): v is HarnessView => v instanceof HarnessView && v !== this && v.file === this.file);
+	}
+
+	showTab(t: Tab) { this.tab = t; this.render(); }
 
 	changed() {
 		if (this.broken !== null) return void new Notice("DC Wiring: file is not valid JSON, changes are not saved.");
@@ -144,6 +172,7 @@ export class HarnessView extends TextFileView implements Host {
 		const now = this.getViewData();
 		if (now !== this.history[this.history.length - 1]) this.history = [...this.history.slice(-49), now];
 		this.render();
+		for (const v of this.siblings()) { v.h = parseHarness(now); v.sel = this.sel; v.lsel = this.lsel; v.render(); }
 	}
 
 	// shortcut: undo only (no redo), last 50 edits, cleared when the file changes outside this view
@@ -151,9 +180,10 @@ export class HarnessView extends TextFileView implements Host {
 		if (this.broken !== null || this.history.length < 2) return void new Notice("DC Wiring: nothing to undo.");
 		this.history.pop();
 		this.h = parseHarness(this.history[this.history.length - 1]);
-		this.sel = null;
+		this.sel = this.lsel = null;
 		this.requestSave();
 		this.render();
+		for (const v of this.siblings()) { v.h = parseHarness(this.getViewData()); v.sel = v.lsel = null; v.render(); }
 	}
 
 	editComponent(c: Component) {
@@ -175,6 +205,20 @@ export class HarnessView extends TextFileView implements Host {
 			}
 			if (v.exposed !== undefined) { if (v.exposed) c.exposed = true; else delete c.exposed; }
 			c.partId = v.partId || undefined;
+			this.changed();
+		}).open();
+	}
+
+	editBundle(b: Bundle) {
+		const calc = (s: string) => { const r = parseLength(s); return r ? `= ${formatLength(r.mm, r.unit)}` : "Not a length"; };
+		new FormModal(this.app, `Edit ${b.id}`, [
+			{ key: "length", label: "Length (e.g. 40 + 30 + 40, 2 * 30cm, 1m 20cm)", value: String(b.length), preview: calc },
+			{ key: "label", label: "Label", value: b.label ?? "" },
+		], v => {
+			const r = parseLength(v.length);
+			if (r) b.length = Math.round(r.mm * 10) / 10;
+			else new Notice(`DC Wiring: "${v.length}" is not a length.`);
+			if (v.label.trim()) b.label = v.label.trim(); else delete b.label;
 			this.changed();
 		}).open();
 	}
@@ -234,9 +278,14 @@ export class HarnessView extends TextFileView implements Host {
 	render() {
 		if (!this.bar) return;
 		this.renderBar();
-		// keep the svg mounted while on the schematic, so a drag keeps its pointer capture
-		if (this.tab !== "schematic" || this.schematic.svg.parentElement !== this.body) this.body.empty();
-		if (this.tab === "schematic") {
+		// keep the svg mounted while on a canvas, so a drag keeps its pointer capture
+		const svg = this.tab === "schematic" ? this.schematic.svg : this.tab === "layout" ? this.layout.svg : null;
+		if (!svg || svg.parentElement !== this.body) this.body.empty();
+		if (this.tab === "layout") {
+			this.body.appendChild(this.layout.svg);
+			this.layout.render();
+			if (!this.layoutFitted && this.h.components.length) requestAnimationFrame(() => this.fitInitially());
+		} else if (this.tab === "schematic") {
 			this.body.appendChild(this.schematic.svg);
 			this.schematic.render();
 			if (!this.fitted && this.h.components.length) requestAnimationFrame(() => this.fitInitially());
@@ -247,7 +296,7 @@ export class HarnessView extends TextFileView implements Host {
 	private renderBar() {
 		this.bar.empty();
 		const tabs = this.bar.createDiv("dcw-tabs");
-		for (const [t, label] of [["schematic", "Schematic"], ["connections", "Connections"], ["parts", "Parts"]] as const) {
+		for (const [t, label] of [["schematic", "Schematic"], ["layout", "Layout"], ["connections", "Connections"], ["parts", "Parts"]] as const) {
 			const b = tabs.createEl("button", { text: label, cls: t === this.tab ? "is-active" : "" });
 			b.onclick = () => { this.tab = t; this.render(); };
 		}
@@ -260,6 +309,9 @@ export class HarnessView extends TextFileView implements Host {
 			actions.createEl("button", { text: "Fit" }).onclick = () => this.schematic.fit();
 			const ids = actions.createEl("button", { text: "Wire IDs", cls: this.h.hideWireIds ? "" : "is-active", attr: { "aria-label": "Show IDs on wires without a name" } });
 			ids.onclick = () => { if (this.h.hideWireIds) delete this.h.hideWireIds; else this.h.hideWireIds = true; this.changed(); };
+		} else if (this.tab === "layout") {
+			actions.createEl("button", { text: "+ Branch point" }).onclick = () => this.layout.addBranchPoint();
+			actions.createEl("button", { text: "Fit" }).onclick = () => this.layout.fit();
 		} else if (this.tab === "parts") {
 			actions.createEl("button", { text: "+ Part" }).onclick = () => {
 				this.h.parts.push({ id: nextId(this.h, "P", this.h.parts), number: "", manufacturer: "", description: "", price: 0 });
@@ -286,6 +338,7 @@ export class HarnessView extends TextFileView implements Host {
 		const table = this.body.createEl("table", { cls: "dcw-table" });
 		const head = table.createEl("tr");
 		for (const t of ["ID", "Name", "From", "To", "Signal", "Colour", "Gauge", "Length (mm)", "Part", ""]) head.createEl("th", { text: t });
+		const routes = routeWires(this.h);
 		for (const w of this.h.wires) {
 			const tr = table.createEl("tr", { cls: this.sel?.wires?.includes(w.id) ? "is-selected" : "" });
 			tr.onclick = e => { if (!(e.target as HTMLElement).closest("input, select")) this.select({ wires: [w.id] }); };
@@ -296,6 +349,8 @@ export class HarnessView extends TextFileView implements Host {
 			tr.createEl("td", { text: end(w.to) });
 			tr.createEl("td", { text: signalOf(this.h, w.from) ?? "" });
 			for (const key of ["color", "gauge", "length"] as const) {
+				const r = key === "length" && routes.get(w.id);
+				if (r) { tr.createEl("td", { text: String(Math.round(r.length)), attr: { title: `Routed through ${r.bundles.join(", ") || "no bundles"}` } }); continue; }
 				const input = tr.createEl("td").createEl("input", { value: String(w[key] || ""), type: key === "length" ? "number" : "text" });
 				input.onchange = () => {
 					if (key === "length") w.length = Math.max(0, Number(input.value) || 0);

@@ -62,3 +62,18 @@
 .dcw-parents { color: var(--text-muted); font-size: var(--font-ui-smaller); margin-left: 8px; }
 .dcw-section td { color: var(--text-muted); font-weight: 600; padding-top: 10px; }
 .dcw-readonly td { color: var(--text-muted); padding: 6px 8px; }
+
+/* layout view */
+.dcw-wire.is-unrouted .dcw-core, .dcw-wire.is-unrouted .dcw-outline { stroke-dasharray: 8 5; }
+.dcw-bundle { cursor: pointer; }
+.dcw-bundle path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.dcw-bline { stroke: var(--text-muted); stroke-width: 6; }
+.dcw-bundle.is-empty .dcw-bline { stroke-dasharray: 10 6; stroke-width: 3; }
+.dcw-bundle.is-lit .dcw-bline { stroke: var(--text-accent); }
+.dcw-bundle.is-selected .dcw-bline { stroke: var(--interactive-accent); stroke-width: 8; }
+.dcw-blen { fill: var(--text-muted); font-size: 11px; text-anchor: middle; cursor: text; }
+.dcw-comp.is-selected .dcw-splice { stroke-width: 2; }
+.dcw-smark rect { fill: var(--background-secondary); stroke: var(--text-muted); }
+.dcw-smark text { fill: var(--text-muted); font-size: 10px; }
+.dcw-smark.is-lit rect { fill: var(--interactive-accent); stroke: var(--interactive-accent); }
+.dcw-smark { pointer-events: none; }

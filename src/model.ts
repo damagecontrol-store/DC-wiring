@@ -1,4 +1,5 @@
 // Harness document model. Stored as pretty JSON in a .harness file.
+import { wireLength } from "./bundles.ts";
 
 export type Kind = "connector" | "splice" | "harness"; // harness = sub-harness block
 
@@ -15,6 +16,7 @@ export interface Component {
 	exposed?: boolean; // connector: its pins show on the block when this harness is used as a sub-harness
 	file?: string; // sub-harness block: vault path of the .harness file
 	ports?: string[]; // sub-harness block: "C4:1" per pin, in pin order. Only grows, so pin numbers stay stable
+	pos?: { x: number; y: number }; // centre on the Layout view; unset = its schematic x, y
 }
 
 export interface End { c: string; pin: number }
@@ -39,12 +41,26 @@ export interface Part {
 	price: number; // per piece, or per metre for wire parts
 }
 
+/** A run of wires on the Layout view, between two components or branch points. */
+export interface Bundle {
+	id: string; // B1
+	from: string; // component or branch point id
+	to: string;
+	length: number; // mm
+	points?: { x: number; y: number }[]; // layout bend points, in order from -> to
+	label?: string;
+}
+
+export interface BranchPoint { id: string; x: number; y: number } // BP1
+
 export interface Harness {
 	version: 1;
 	components: Component[];
 	wires: Wire[];
 	parts: Part[];
 	hideWireIds?: boolean; // canvas: don't label unnamed wires with their id
+	bundles?: Bundle[];
+	branchPoints?: BranchPoint[];
 	seq?: Record<string, number>; // last id number handed out per prefix, so deleted ids are never reused
 }
 
@@ -74,6 +90,7 @@ export function parseHarness(text: string): Harness {
 		if (typeof p?.id !== "string") throw new Error("every part needs an id");
 		return { ...p, number: p.number ?? "", manufacturer: p.manufacturer ?? "", description: p.description ?? "", price: p.price ?? 0 };
 	});
+	for (const b of h.bundles ?? []) if (typeof b?.id !== "string" || typeof b.from !== "string" || typeof b.to !== "string") throw new Error(`bundle ${b?.id ?? "?"} needs an id, "from" and "to"`);
 	// keep fields this version doesn't know about, so saving never drops them
 	return { ...h, version: 1, components, wires, parts };
 }
@@ -151,7 +168,7 @@ export interface BomRow { part: Part; qty: number; unit: string; total: number; 
 export function bom(h: Harness): BomRow[] {
 	return h.parts.map(part => {
 		const comps = h.components.filter(c => c.partId === part.id).length;
-		const mm = h.wires.filter(w => w.partId === part.id).reduce((s, w) => s + (w.length || 0), 0);
+		const mm = h.wires.filter(w => w.partId === part.id).reduce((s, w) => s + wireLength(h, w), 0);
 		const onWires = h.wires.some(w => w.partId === part.id);
 		const isWire = mm > 0 || (comps === 0 && onWires);
 		const qty = isWire ? mm / 1000 : comps;
@@ -162,6 +179,7 @@ export function bom(h: Harness): BomRow[] {
 export function removeComponent(h: Harness, id: string) {
 	h.components = h.components.filter(c => c.id !== id);
 	h.wires = h.wires.filter(w => w.from.c !== id && w.to.c !== id);
+	if (h.bundles) h.bundles = h.bundles.filter(b => b.from !== id && b.to !== id);
 }
 
 export function removePart(h: Harness, id: string) {

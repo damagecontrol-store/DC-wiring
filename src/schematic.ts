@@ -1,4 +1,5 @@
 import { Menu } from "obsidian";
+import { routeWires } from "./bundles.ts";
 import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, signalOf, wireLabel, type Component, type End, type Harness, type Wire } from "./model.ts";
 import { insertIndex, labelPoint, orthoPoints, roundedPath, routeAround, separate, STUB, type P, type Rect } from "./route.ts";
 import { wireColors } from "./ui.ts";
@@ -101,6 +102,7 @@ export class Schematic {
 
 		const lit = sel ? netWires(h, sel) : null;
 		const nets = computeNets(h);
+		const routes = h.bundles?.length ? routeWires(h) : null;
 
 		const routed = h.wires.flatMap(w => {
 			const ends = this.ends(w);
@@ -126,6 +128,7 @@ export class Schematic {
 			const d = roundedPath(pts);
 			const g = el(this.g, "g", { class: "dcw-wire", "data-wire": w.id });
 			if (lit && !lit.has(w.id)) g.addClass("is-dim");
+			if (routes && !routes.has(w.id)) g.addClass("is-unrouted"); // has a layout, but no bundle path
 			if (sel?.wires?.includes(w.id)) el(g, "path", { d, class: "dcw-glow" });
 			const [base, stripe] = wireColors(w.color);
 			el(g, "path", { d, class: "dcw-outline" });
