@@ -1,6 +1,7 @@
 import { FuzzySuggestModal, Notice, TextFileView, TFile, type App, type WorkspaceLeaf } from "obsidian";
 import { bom, emptyHarness, formatPins, nextId, parseHarness, parsePins, relinkSub, removeComponent, removePart, signalOf, subBom, syncPorts, type BomRow, type Component, type End, type Harness } from "./model.ts";
-import { Schematic, type Host, type Selection } from "./schematic.ts";
+import { cavName, compLabel, designations, labelOf, parseCavities, pasteSignals, selComps, TERMINAL_TYPES } from "./components.ts";
+import { NOTE_COLORS, Schematic, type Host, type Selection } from "./schematic.ts";
 import { FormModal, freePath, type Field } from "./ui.ts";
 
 export const VIEW_TYPE = "dc-wiring-harness";
@@ -18,6 +19,7 @@ export class HarnessView extends TextFileView implements Host {
 	private body!: HTMLElement;
 	private fitted = false;
 	private history: string[] = []; // saved states, newest last; Cmd/Ctrl+Z steps back
+	private future: string[] = []; // undone states, for redo
 
 	constructor(leaf: WorkspaceLeaf) { super(leaf); }
 
@@ -37,6 +39,7 @@ export class HarnessView extends TextFileView implements Host {
 			new Notice(`DC Wiring: ${this.file?.name} can't be read (${(e as Error).message}). Editing is disabled so the file is not overwritten.`);
 		}
 		this.history = [this.getViewData()]; // a new or externally changed file starts a fresh undo list
+		this.future = [];
 		// fit when a file opens with content; an empty one stays at 100% while you add the first parts
 		if (clear) { this.sel = null; this.fitted = !this.h.components.length; }
 		this.render();
@@ -124,10 +127,14 @@ export class HarnessView extends TextFileView implements Host {
 		}));
 		this.registerDomEvent(this.contentEl, "keydown", e => {
 			if ((e.target as HTMLElement).closest("input, select, textarea")) return;
+			const mod = e.metaKey || e.ctrlKey, k = e.key.toLowerCase();
+			if (mod && k === "z" && !e.shiftKey) { e.preventDefault(); this.undo(); }
+			else if (mod && (k === "y" || k === "z")) { e.preventDefault(); this.redo(); }
+			else if (e.key === "Escape") this.select(null);
+			else if (this.tab !== "schematic") return;
 			// delete only where the selection is visible
-			if ((e.key === "Delete" || e.key === "Backspace") && this.tab === "schematic") this.deleteSelection();
-			if (e.key === "Escape") this.select(null);
-			if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === "z") { e.preventDefault(); this.undo(); }
+			else if (!mod && (e.key === "Delete" || e.key === "Backspace" || k === "x")) this.deleteSelection();
+			else if (this.schematic.key(e)) { e.preventDefault(); e.stopPropagation(); }
 		});
 	}
 
@@ -142,28 +149,46 @@ export class HarnessView extends TextFileView implements Host {
 		if (this.broken !== null) return void new Notice("DC Wiring: file is not valid JSON, changes are not saved.");
 		this.requestSave();
 		const now = this.getViewData();
-		if (now !== this.history[this.history.length - 1]) this.history = [...this.history.slice(-49), now];
+		if (now !== this.history[this.history.length - 1]) { this.history = [...this.history.slice(-49), now]; this.future = []; }
 		this.render();
 	}
 
-	// shortcut: undo only (no redo), last 50 edits, cleared when the file changes outside this view
+	// shortcut: last 50 edits, cleared when the file changes outside this view
 	private undo() {
 		if (this.broken !== null || this.history.length < 2) return void new Notice("DC Wiring: nothing to undo.");
-		this.history.pop();
+		this.future.push(this.history.pop()!);
 		this.h = parseHarness(this.history[this.history.length - 1]);
 		this.sel = null;
 		this.requestSave();
 		this.render();
 	}
 
+	private redo() {
+		const next = this.future.pop();
+		if (this.broken !== null || next === undefined) return void new Notice("DC Wiring: nothing to redo.");
+		this.history.push(next);
+		this.h = parseHarness(next);
+		this.sel = null;
+		this.requestSave();
+		this.render();
+	}
+
 	editComponent(c: Component) {
-		const fields: Field[] = [{ key: "name", label: "Name", value: c.name }];
+		const sub = c.kind === "harness";
+		if (c.kind === "note") return new FormModal(this.app, `Edit ${c.id}`, [
+			{ key: "text", label: "Text", value: c.text ?? "", multiline: true },
+			{ key: "color", label: "Colour", value: c.color ?? "yellow", options: Object.fromEntries(NOTE_COLORS.map(k => [k, k[0].toUpperCase() + k.slice(1)])) },
+		], v => { c.text = v.text; c.color = v.color; this.changed(); }).open();
+		const fields: Field[] = [{ key: "name", label: sub ? "Name" : "Label (shown instead of the ID; empty = ID)", value: sub ? c.name : labelOf(c) }];
 		if (c.kind === "connector") {
 			fields.push({ key: "pins", label: "Pins (count like 8, or rows x columns like 2x4)", value: formatPins(c) });
+			fields.push({ key: "cavities", label: "Cavity designations, comma separated (empty = pin numbers)", value: c.cavities?.join(", ") ?? "" });
+			fields.push({ key: "tpl", label: "Or set all designations to", value: "", options: { "": "— as typed above —", numbers: "Numbers: 1, 2, 3", letters: "Letters: A, B, C", grid: "Grid: A1, A2, B1 (rows x columns)" } });
 			fields.push({ key: "exposed", label: "Show in main harness (when this file is used as a sub-harness)", value: c.exposed ? "yes" : "", options: { "": "No", yes: "Yes" } });
 		}
+		if (c.kind === "terminal") fields.push({ key: "terminal", label: "Type", value: c.terminal ?? "ring", options: Object.fromEntries(TERMINAL_TYPES.map(t => [t, t])) });
 		new FormModal(this.app, `Edit ${c.id}`, [...fields, this.partField(c.partId)], v => {
-			c.name = v.name.trim() || c.name;
+			c.name = v.name.trim() || (sub ? c.name : c.id);
 			if (v.pins !== undefined) {
 				const p = parsePins(v.pins);
 				if (!p) new Notice(`DC Wiring: "${v.pins}" is not a pin count. Use e.g. 8 or 2x4.`);
@@ -171,8 +196,17 @@ export class HarnessView extends TextFileView implements Host {
 					if (p.pins < c.pins) this.h.wires = this.h.wires.filter(w => !((w.from.c === c.id && w.from.pin > p.pins) || (w.to.c === c.id && w.to.pin > p.pins)));
 					c.pins = p.pins;
 					if (p.layout) c.layout = p.layout; else delete c.layout;
+					for (const key of ["nc", "globals"] as const) {
+						const kept = c[key]?.filter(n => n <= c.pins);
+						if (kept?.length) c[key] = kept; else delete c[key];
+					}
 				}
 			}
+			if (v.cavities !== undefined) {
+				const list = v.tpl ? designations(v.tpl, c.pins, c.layout?.cols) : parseCavities(v.cavities, c.pins);
+				if (list) c.cavities = list; else delete c.cavities;
+			}
+			if (v.terminal !== undefined) c.terminal = v.terminal;
 			if (v.exposed !== undefined) { if (v.exposed) c.exposed = true; else delete c.exposed; }
 			c.partId = v.partId || undefined;
 			this.changed();
@@ -199,11 +233,28 @@ export class HarnessView extends TextFileView implements Host {
 	}
 
 	editSignal(c: Component, pin: number) {
-		new FormModal(this.app, `${c.id} pin ${pin} signal`, [{ key: "s", label: "Signal (e.g. +12V, GND, CAN H)", value: c.signals?.[pin] ?? "" }], v => {
+		const m = new FormModal(this.app, `${compLabel(this.h, c)} cavity ${cavName(c, pin)}`, [
+			{ key: "s", label: "Signal (e.g. +12V, GND, CAN H). Paste a column to fill the next cavities", value: c.signals?.[pin] ?? "" },
+			{ key: "cav", label: "Cavity designation (empty = pin number)", value: c.cavities?.[pin - 1] ?? "" },
+		], v => {
 			c.signals = { ...c.signals, [pin]: v.s.trim() };
 			if (!c.signals[pin]) delete c.signals[pin];
+			if (!c.signals[pin] && c.globals) toggleOff(c, pin);
+			const cav = Array.from({ length: c.pins }, (_, i) => c.cavities?.[i] ?? "");
+			cav[pin - 1] = v.cav.trim();
+			if (cav.some((s, i) => s && s !== String(i + 1))) c.cavities = cav; else delete c.cavities;
 			this.changed();
-		}).open();
+		});
+		m.open();
+		// an input drops newlines, so a pasted column is caught before it lands
+		m.contentEl.querySelector("input")?.addEventListener("paste", e => {
+			const text = e.clipboardData?.getData("text") ?? "";
+			if (!text.trim().includes("\n")) return;
+			e.preventDefault();
+			m.close();
+			pasteSignals(c, pin, text);
+			this.changed();
+		});
 	}
 
 	private partField(partId?: string) {
@@ -224,7 +275,7 @@ export class HarnessView extends TextFileView implements Host {
 
 	private deleteSelection() {
 		if (!this.sel) return;
-		if (this.sel.component) removeComponent(this.h, this.sel.component);
+		for (const id of selComps(this.sel)) removeComponent(this.h, id);
 		if (this.sel.wires) this.h.wires = this.h.wires.filter(w => !this.sel!.wires!.includes(w.id));
 		this.sel = null;
 		this.changed();
@@ -235,9 +286,9 @@ export class HarnessView extends TextFileView implements Host {
 		if (!this.bar) return;
 		this.renderBar();
 		// keep the svg mounted while on the schematic, so a drag keeps its pointer capture
-		if (this.tab !== "schematic" || this.schematic.svg.parentElement !== this.body) this.body.empty();
+		if (this.tab !== "schematic" || this.schematic.el.parentElement !== this.body) this.body.empty();
 		if (this.tab === "schematic") {
-			this.body.appendChild(this.schematic.svg);
+			this.body.appendChild(this.schematic.el);
 			this.schematic.render();
 			if (!this.fitted && this.h.components.length) requestAnimationFrame(() => this.fitInitially());
 		} else if (this.tab === "connections") this.renderConnections();
@@ -281,7 +332,7 @@ export class HarnessView extends TextFileView implements Host {
 		const end = (e: End) => {
 			const c = this.h.components.find(c => c.id === e.c);
 			if (c?.kind === "harness") return `${c.name} › ${c.ports?.[e.pin - 1] ?? e.pin}`;
-			return `${e.c} ${c?.name ?? ""} : ${e.pin}`;
+			return c ? `${compLabel(this.h, c)} : ${cavName(c, e.pin)}` : `${e.c} : ${e.pin}`;
 		};
 		const table = this.body.createEl("table", { cls: "dcw-table" });
 		const head = table.createEl("tr");
@@ -362,6 +413,12 @@ export class HarnessView extends TextFileView implements Host {
 		s.value = value ?? "";
 		s.onchange = () => set(s.value || undefined);
 	}
+}
+
+// a cleared signal can't stay global
+function toggleOff(c: Component, pin: number) {
+	c.globals = c.globals!.filter(p => p !== pin);
+	if (!c.globals.length) delete c.globals;
 }
 
 /** Pick an existing .harness file to use as a sub-harness, or null for a new one. */
