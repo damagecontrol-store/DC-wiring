@@ -1,4 +1,5 @@
 import { Menu } from "obsidian";
+import { effectiveWire } from "./parts.ts";
 import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, signalOf, wireLabel, type Component, type End, type Harness, type Wire } from "./model.ts";
 import { insertIndex, labelPoint, orthoPoints, roundedPath, routeAround, separate, STUB, type P, type Rect } from "./route.ts";
 import { wireColors } from "./ui.ts";
@@ -127,7 +128,7 @@ export class Schematic {
 			const g = el(this.g, "g", { class: "dcw-wire", "data-wire": w.id });
 			if (lit && !lit.has(w.id)) g.addClass("is-dim");
 			if (sel?.wires?.includes(w.id)) el(g, "path", { d, class: "dcw-glow" });
-			const [base, stripe] = wireColors(w.color);
+			const [base, stripe] = wireColors(effectiveWire(h, w).color);
 			el(g, "path", { d, class: "dcw-outline" });
 			el(g, "path", { d, class: "dcw-core", stroke: base });
 			if (stripe) el(g, "path", { d, class: "dcw-stripe", stroke: stripe });
@@ -247,7 +248,7 @@ export class Schematic {
 			const cx = left + 4 + ((p - 1) % cols) * CELL + CELL / 2, cy = top + 4 + Math.floor((p - 1) / cols) * CELL + CELL / 2;
 			const w = this.host.h.wires.find(w => (w.from.c === c.id && w.from.pin === p) || (w.to.c === c.id && w.to.pin === p));
 			const cav = el(g, "circle", { cx, cy, r: 7, class: "dcw-pin dcw-cavity", "data-pin": p, "data-comp": c.id, "data-row": p });
-			if (w) { cav.style.stroke = wireColors(w.color)[0]; cav.addClass("is-wired"); } // inline: beats the .dcw-pin stroke
+			if (w) { cav.style.stroke = wireColors(effectiveWire(this.host.h, w).color)[0]; cav.addClass("is-wired"); } // inline: beats the .dcw-pin stroke
 			if (lit && w && !lit.has(w.id)) cav.addClass("is-dim");
 			el(g, "text", { x: cx, y: cy + 3, class: "dcw-cavno" }, String(p));
 		}

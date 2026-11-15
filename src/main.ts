@@ -6,9 +6,19 @@ import { HarnessView, VIEW_TYPE } from "./view.ts";
 export default class DCWiringPlugin extends Plugin {
 	async onload() {
 		this.registerView(VIEW_TYPE, leaf => new HarnessView(leaf));
-		this.registerExtensions(["harness"], VIEW_TYPE);
+		this.registerExtensions(["harness", "harnesslib"], VIEW_TYPE);
 		this.addRibbonIcon("cable", "New harness", () => this.create());
 		this.addCommand({ id: "new-harness", name: "New harness", callback: () => this.create() });
+		this.addCommand({ id: "new-part-library", name: "New part library", callback: () => this.create(undefined, "harnesslib") });
+		// only in a harness, not in a library: a library has nothing to add from or to
+		const inHarness = (run: (v: HarnessView) => void) => (checking: boolean) => {
+			const v = this.app.workspace.getActiveViewOfType(HarnessView);
+			if (!v || v.isLib) return false;
+			if (!checking) run(v);
+			return true;
+		};
+		this.addCommand({ id: "add-parts-to-library", name: "Add all harness parts to a part library", checkCallback: inHarness(v => v.addAllToLibrary()) });
+		this.addCommand({ id: "add-part-from-library", name: "Add a part from a part library", checkCallback: inHarness(v => v.addFromLibrary()) });
 		// keep sub-harness links working when a .harness file is renamed or moved
 		this.registerEvent(this.app.vault.on("rename", async (file, oldPath) => {
 			if (!(file instanceof TFile) || file.extension !== "harness") return;
@@ -29,9 +39,9 @@ export default class DCWiringPlugin extends Plugin {
 		}));
 	}
 
-	private async create(folder?: TFolder) {
+	private async create(folder?: TFolder, ext = "harness") {
 		const dir = folder ?? this.app.fileManager.getNewFileParent(this.app.workspace.getActiveFile()?.path ?? "");
-		const file = await this.app.vault.create(freePath(this.app, dir.path, "Harness"), JSON.stringify(emptyHarness(), null, "\t"));
+		const file = await this.app.vault.create(freePath(this.app, dir.path, ext === "harness" ? "Harness" : "Parts library", ext), JSON.stringify(emptyHarness(), null, "\t"));
 		await this.app.workspace.getLeaf(true).openFile(file);
 	}
 }
