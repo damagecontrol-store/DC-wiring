@@ -16,6 +16,16 @@ export default class DCWiringPlugin extends Plugin {
 			if (!check) void x.run(v);
 			return true;
 		} });
+		this.addCommand({
+			id: "open-layout-beside", name: "Open layout beside schematic", checkCallback: checking => {
+				const view = this.app.workspace.getActiveViewOfType(HarnessView);
+				if (!view?.file || checking) return !!view?.file;
+				const file = view.file;
+				view.showTab("schematic");
+				const leaf = this.app.workspace.getLeaf("split", "vertical");
+				void leaf.openFile(file).then(() => (leaf.view as HarnessView).showTab("layout"));
+			},
+		});
 		// keep sub-harness links working when a .harness file is renamed or moved
 		this.registerEvent(this.app.vault.on("rename", async (file, oldPath) => {
 			if (!(file instanceof TFile) || file.extension !== "harness") return;
