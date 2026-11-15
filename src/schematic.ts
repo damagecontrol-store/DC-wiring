@@ -1,7 +1,8 @@
-import { Menu } from "obsidian";
+import { Menu, Notice } from "obsidian";
+import { cavName, compLabel, duplicate, labelOf, matches, mateError, moveConnections, netSignals, PREFIX, resolveTarget, selComps } from "./components.ts";
+import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, wireLabel, type Component, type End, type Harness, type Wire } from "./model.ts";
 import { routeWires } from "./bundles.ts";
 import { effectiveWire } from "./parts.ts";
-import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, signalOf, wireLabel, type Component, type End, type Harness, type Wire } from "./model.ts";
 import { insertIndex, labelPoint, orthoPoints, roundedPath, routeAround, separate, STUB, type P, type Rect } from "./route.ts";
 import { wireColors } from "./ui.ts";
 import { drawWiringTables, wiringTableItem } from "./wiringtable.ts";
@@ -11,8 +12,11 @@ import type { CanvasImage, Group } from "./model.ts";
 
 const NS = "http://www.w3.org/2000/svg";
 export const W = 140, HDR = 24, ROW = 20, GRID = 20, CELL = 18;
+const DW = 60; // diode / resistor symbol width
+export const NOTE_COLORS = ["yellow", "orange", "red", "green", "blue", "purple"];
 
-export type Selection = { wires?: string[]; component?: string } | null;
+// component: one selected; components: several (box select, shift-click)
+export type Selection = { wires?: string[]; component?: string; components?: string[] } | null;
 
 /** What the canvas needs from its host view. */
 export interface Host {
@@ -36,12 +40,13 @@ export interface Host {
 }
 
 type Drag =
-	| { mode: "move"; id: string; dx: number; dy: number; moved: boolean }
+	| { mode: "move"; sx: number; sy: number; items: { o: P; x: number; y: number }[]; moved: boolean }
 	| { mode: "pan"; sx: number; sy: number; px: number; py: number }
-	| { mode: "wire"; from: End; line: SVGLineElement }
+	| { mode: "wire"; from: End; line: SVGLineElement; kind: "wire" | "move" | "mate" } // move: Mod-drag moves a pin's wires
 	| { mode: "bend"; w: Wire; i: number; moved: boolean }
 	| { mode: "group"; g: Group; sx: number; sy: number; ox: number; oy: number }
-	| { mode: "image"; img: CanvasImage; dx: number; dy: number; resize: boolean; moved: boolean };
+	| { mode: "image"; img: CanvasImage; dx: number; dy: number; resize: boolean; moved: boolean }
+	| { mode: "box"; x: number; y: number; rect: SVGRectElement };
 
 function el<K extends keyof SVGElementTagNameMap>(parent: Element, tag: K, attrs: Record<string, string | number>, text?: string) {
 	const e = document.createElementNS(NS, tag);
@@ -53,11 +58,18 @@ function el<K extends keyof SVGElementTagNameMap>(parent: Element, tag: K, attrs
 
 /** Top of a connector's pin grid: under the pin rows and, if there is one, the part label. */
 const faceTop = (c: Component, hasPart: boolean) => c.y + HDR + c.pins * ROW + (hasPart ? 22 : 8);
-const centerX = (c: Component) => c.kind === "splice" ? c.x : c.x + W / 2;
+const twoPin = (c: Component) => c.kind === "diode" || c.kind === "resistor";
+const centerX = (c: Component) => c.kind === "splice" ? c.x : c.x + (twoPin(c) ? DW : W) / 2;
 const snap = (v: number) => Math.round(v / GRID) * GRID;
+
+function toggleIn(c: Component, key: "nc" | "globals", pin: number) {
+	const list = c[key] ?? [], next = list.includes(pin) ? list.filter(p => p !== pin) : [...list, pin];
+	if (next.length) c[key] = next; else delete c[key];
+}
 
 export function anchor(c: Component, pin: number, towardX: number) {
 	if (c.kind === "splice") return { x: c.x, y: c.y, dx: towardX >= c.x ? 1 : -1 };
+	if (twoPin(c)) return { x: pin === 1 ? c.x : c.x + DW, y: c.y + 10, dx: pin === 1 ? -1 : 1 };
 	const right = towardX > c.x + W / 2;
 	const row = c.kind === "cable" && pin === 0 ? c.pins : pin - 1; // cable shield: the row under the cores
 	return { x: right ? c.x + W : c.x, y: c.y + HDR + row * ROW + ROW / 2, dx: right ? 1 : -1 };
@@ -66,7 +78,14 @@ export function anchor(c: Component, pin: number, towardX: number) {
 let canvases = 0; // each canvas needs its own pattern id: url(#id) picks the first match in the whole page
 
 export class Schematic {
+	el: HTMLDivElement; // svg plus the search box and toggle bar on top of it
 	svg: SVGSVGElement;
+	private opts = { net: true, ids: true, dest: false };
+	private query = "";
+	private toggles: HTMLDivElement;
+	private search: HTMLDivElement;
+	private results: HTMLDivElement;
+	private targets: HTMLDataListElement;
 	private gridId = `dcw-grid-${++canvases}`;
 	private g: SVGGElement;
 	private view = { x: 40, y: 40, z: 1 };
@@ -85,6 +104,97 @@ export class Schematic {
 		this.svg.addEventListener("wheel", e => this.wheel(e), { passive: false });
 		this.svg.addEventListener("contextmenu", e => this.menu(e));
 		this.svg.addEventListener("dblclick", e => this.dbl(e));
+		this.el = createDiv("dcw-schematic");
+		this.el.appendChild(this.svg);
+		this.toggles = this.el.createDiv("dcw-toggles");
+		this.search = this.el.createDiv("dcw-search is-hidden");
+		const input = this.search.createEl("input", { type: "search", placeholder: "Search components (Esc closes)" });
+		input.oninput = () => { this.query = input.value.trim(); this.render(); };
+		input.onkeydown = e => {
+			if (e.key === "Enter") (this.results.firstElementChild as HTMLElement | null)?.click();
+			if (e.key !== "Escape") return;
+			this.query = input.value = "";
+			this.search.addClass("is-hidden");
+			this.render();
+			(this.el.closest(".dcw-view") as HTMLElement | null)?.focus(); // so hotkeys keep working
+		};
+		this.results = this.search.createDiv("dcw-results");
+		this.targets = this.el.createEl("datalist", { attr: { id: `dcw-targets-${canvases}` } });
+	}
+
+	/** Canvas hotkeys. True when the key was used. */
+	key(e: KeyboardEvent): boolean {
+		const k = e.key.toLowerCase(), ids = selComps(this.host.sel), h = this.host.h;
+		if (e.metaKey || e.ctrlKey) {
+			if (k !== "d") return false;
+			const copies = duplicate(h, ids);
+			if (copies.length) { this.host.sel = copies.length > 1 ? { components: copies } : { component: copies[0] }; this.host.changed(); }
+			return true;
+		}
+		if (e.altKey) return false;
+		const step = ({ arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, -1], arrowdown: [0, 1] } as Record<string, number[]>)[k];
+		if (step) {
+			if (!ids.length) return false;
+			for (const it of this.moveItems(ids)) { it.o.x += step[0] * GRID; it.o.y += step[1] * GRID; }
+			this.host.changed();
+		} else if (k === "f") this.fit();
+		else if (k === "n") this.toggle("net");
+		else if (k === "i") this.toggle("ids");
+		else if (k === "d") this.toggle("dest");
+		else if (k === " ") {
+			this.search.removeClass("is-hidden");
+			const input = this.search.querySelector("input")!;
+			input.focus();
+			input.select();
+		} else return false;
+		return true;
+	}
+
+	private toggle(k: "net" | "ids" | "dest") {
+		this.opts[k] = !this.opts[k];
+		this.render();
+	}
+
+	private renderOverlay() {
+		this.toggles.empty();
+		for (const [k, text, label] of [["net", "Net", "Highlight the whole net (N)"], ["ids", "IDs", "Show component IDs (I)"], ["dest", "Dest", "Destinations: type a target next to each cavity (D)"]] as const) {
+			const b = this.toggles.createEl("button", { text, cls: this.opts[k] ? "is-active" : "", attr: { "aria-label": label } });
+			b.onclick = () => this.toggle(k);
+		}
+		this.results.empty();
+		if (!this.query) return;
+		const h = this.host.h;
+		for (const c of h.components.filter(c => matches(h, c, this.query)).slice(0, 30)) {
+			this.results.createDiv({ text: `${compLabel(h, c)}${labelOf(c) ? ` (${c.id})` : ""} · ${c.kind}` }).onclick = () => {
+				this.host.select({ component: c.id });
+				this.centerOn(c);
+			};
+		}
+		if (!this.results.childElementCount) this.results.createDiv({ cls: "dcw-hint", text: "No matches" });
+	}
+
+	private centerOn(c: Component) {
+		const e = this.extent(c), r = this.svg.getBoundingClientRect();
+		this.view.x = r.width / 2 - (e.x1 + e.x2) / 2 * this.view.z;
+		this.view.y = r.height / 2 - (e.y1 + e.y2) / 2 * this.view.z;
+		this.applyView();
+	}
+
+	/** Header / label text: the label, with the id in front when IDs are shown. */
+	private title(c: Component) {
+		return this.opts.ids ? [c.id, labelOf(c)].filter(Boolean).join("  ") : labelOf(c) || c.id;
+	}
+
+	private selectComps(ids: string[]) {
+		this.host.select(ids.length > 1 ? { components: ids } : ids.length ? { component: ids[0] } : null);
+	}
+
+	/** What moves with these components: themselves and, when several move, the bend points of wires between them. */
+	private moveItems(ids: string[]) {
+		const h = this.host.h;
+		const items: { o: P; x: number; y: number }[] = h.components.filter(c => ids.includes(c.id)).map(o => ({ o, x: o.x, y: o.y }));
+		if (ids.length > 1) for (const w of h.wires) if (ids.includes(w.from.c) && ids.includes(w.to.c)) for (const o of w.points ?? []) items.push({ o, x: o.x, y: o.y });
+		return items;
 	}
 
 	private world(e: MouseEvent) {
@@ -117,9 +227,22 @@ export class Schematic {
 		this.images();
 		this.groups();
 
-		const lit = sel ? netWires(h, sel) : null;
+		const comps = selComps(sel);
+		const lit = !sel ? null : this.opts.net ? netWires(h, { ...sel, components: comps })
+			: new Set(h.wires.filter(w => sel.wires?.includes(w.id) || comps.includes(w.from.c) || comps.includes(w.to.c)).map(w => w.id));
 		const nets = computeNets(h);
 		const routes = h.bundles?.length ? routeWires(h) : null;
+		this.renderOverlay();
+
+		for (const m of h.mates ?? []) {
+			const a = h.components.find(c => c.id === m.a), b = h.components.find(c => c.id === m.b);
+			if (!a || !b) continue;
+			const [l, r] = a.x <= b.x ? [a, b] : [b, a], x1 = l.x + W, x2 = r.x, y1 = l.y + HDR / 2, y2 = r.y + HDR / 2;
+			const err = mateError(h, m);
+			const g = el(this.g, "g", { class: err ? "dcw-mate is-error" : "dcw-mate" });
+			el(g, "path", { d: `M${x1} ${y1} H${(x1 + x2) / 2} V${y2} H${x2}` });
+			el(g, "text", { x: x2 - (x2 - x1) / 4, y: y2 - 4, class: "dcw-wlabel" }, err ?? "mated"); // near the far end: mates from one side don't stack labels
+		}
 
 		const routed = h.wires.flatMap(w => {
 			const ends = this.ends(w);
@@ -162,12 +285,15 @@ export class Schematic {
 
 		for (const c of h.components) {
 			const g = el(this.g, "g", { class: "dcw-comp", "data-comp": c.id });
-			if (sel?.component === c.id) g.addClass("is-selected");
+			if (comps.includes(c.id)) g.addClass("is-selected");
+			if (this.query && !matches(h, c, this.query)) g.addClass("is-dim");
 			const part = h.parts.find(p => p.id === c.partId);
+			if (c.kind === "note") { this.note(g, c); continue; }
+			if (twoPin(c)) { this.twoPin(g, c, part?.number); continue; }
 			if (c.kind === "splice") {
 				el(g, "circle", { cx: c.x, cy: c.y, r: 11, class: "dcw-splice" }); // ring = drag handle
 				el(g, "circle", { cx: c.x, cy: c.y, r: 4, class: "dcw-pin", "data-pin": 1, "data-comp": c.id });
-				el(g, "text", { x: c.x, y: c.y - 12, class: "dcw-label is-center" }, c.name);
+				el(g, "text", { x: c.x, y: c.y - 12, class: "dcw-label is-center" }, this.title(c));
 				if (part) el(g, "text", { x: c.x, y: c.y + 22, class: "dcw-part is-center" }, part.number);
 				continue;
 			}
@@ -177,7 +303,9 @@ export class Schematic {
 			if (c.kind === "harness") g.addClass("is-sub");
 			el(g, "rect", { x: c.x, y: c.y, width: W, height: hgt, rx: 4, class: "dcw-body" });
 			el(g, "text", { x: c.x + 8, y: c.y + 16, class: "dcw-label" },
-				c.kind === "harness" ? `⧉ ${c.name}${sub ? "" : " (file not found)"}` : `${c.id}  ${c.name}`);
+				c.kind === "harness" ? `⧉ ${c.name}${sub ? "" : " (file not found)"}` : c.kind === "terminal" ? `${this.title(c)} · ${c.terminal || "terminal"}` : this.title(c));
+			// mate handles: drag one onto another connector
+			if (c.kind === "connector") for (const x of [c.x - 4, c.x + W - 4]) el(g, "rect", { x, y: c.y + 8, width: 8, height: 8, class: "dcw-matehandle", "data-mate": c.id });
 			if (c.kind === "harness" && !c.pins) el(g, "text", { x: c.x + 8, y: c.y + HDR + 14, class: "dcw-hint" }, "No connectors shown in main yet");
 			for (let p = 1; p <= c.pins; p++) {
 				const y = c.y + HDR + (p - 1) * ROW;
@@ -189,10 +317,12 @@ export class Schematic {
 					for (const x of [c.x, c.x + W]) el(g, "circle", { cx: x, cy: y + ROW / 2, r: 4, class: "dcw-pin", "data-pin": p, "data-comp": c.id });
 					continue;
 				}
-				el(g, "text", { x: c.x + 10, y: y + 14, class: "dcw-pinno" }, String(p));
+				el(g, "text", { x: c.x + 10, y: y + 14, class: "dcw-pinno" }, cavName(c, p));
+				if (c.nc?.includes(p)) { el(g, "text", { x: c.x + 34, y: y + 14, class: "dcw-signal is-nc" }, "N/C"); continue; } // no pin: can't be wired
 				const own = c.signals?.[p];
-				const sig = own || signalOf(h, { c: c.id, pin: p }, nets);
-				if (sig) el(g, "text", { x: c.x + 30, y: y + 14, class: own ? "dcw-signal" : "dcw-signal is-inherited" }, sig);
+				const sigs = own ? [own] : netSignals(h, { c: c.id, pin: p }, nets);
+				const cls = own ? (c.globals?.includes(p) ? "dcw-signal is-global" : "dcw-signal") : sigs.length > 1 ? "dcw-signal is-conflict" : "dcw-signal is-inherited";
+				if (sigs.length) el(g, "text", { x: c.x + 34, y: y + 14, class: cls }, sigs.join(" / "));
 				for (const x of [c.x, c.x + W]) el(g, "circle", { cx: x, cy: y + ROW / 2, r: 4, class: "dcw-pin", "data-pin": p, "data-comp": c.id });
 			}
 			if (part) el(g, "text", { x: c.x, y: c.y + hgt + 14, class: "dcw-part" }, `${part.number}${part.manufacturer ? " · " + part.manufacturer : ""}`);
@@ -202,12 +332,72 @@ export class Schematic {
 		// bend point handles of the selected wire, on top of everything
 		for (const w of h.wires) if (sel?.wires?.includes(w.id)) (w.points ?? []).forEach((p, i) =>
 			el(this.g, "rect", { x: p.x - 4, y: p.y - 4, width: 8, height: 8, class: "dcw-wp", "data-wp": `${w.id}:${i}` }));
+		if (this.opts.dest && comps.length === 1) this.destinations(h.components.find(c => c.id === comps[0]));
 		if (this.drag?.mode === "wire") this.g.appendChild(this.drag.line);
+		if (this.drag?.mode === "box") this.g.appendChild(this.drag.rect);
+	}
+
+	/** Diode or resistor: a symbol between two pins, 1 on the left, 2 on the right. */
+	private twoPin(g: SVGGElement, c: Component, part?: string) {
+		const cy = c.y + 10, mid = c.x + DW / 2;
+		el(g, "rect", { x: c.x, y: c.y, width: DW, height: 20, class: "dcw-grab" });
+		el(g, "line", { x1: c.x, y1: cy, x2: c.x + DW, y2: cy, class: "dcw-lead" });
+		if (c.kind === "resistor") el(g, "rect", { x: mid - 15, y: cy - 6, width: 30, height: 12, class: "dcw-symbol" });
+		else {
+			const s = c.flipped ? -1 : 1; // triangle points from anode to the cathode bar
+			el(g, "path", { d: `M${mid - 8 * s} ${cy - 8} V${cy + 8} L${mid + 8 * s} ${cy} Z M${mid + 8 * s} ${cy - 8} V${cy + 8}`, class: "dcw-symbol" });
+		}
+		el(g, "text", { x: mid, y: c.y - 6, class: "dcw-label is-center" }, this.title(c));
+		if (part) el(g, "text", { x: mid, y: c.y + 32, class: "dcw-part is-center" }, part);
+		for (const p of [1, 2]) el(g, "circle", { cx: p === 1 ? c.x : c.x + DW, cy, r: 4, class: "dcw-pin", "data-pin": p, "data-comp": c.id });
+	}
+
+	private noteSize(c: Component) {
+		const lines = (c.text || "Double-click to edit").split("\n");
+		return { lines, w: Math.max(120, ...lines.map(l => l.length * 7 + 16)), h: 12 + lines.length * 16 };
+	}
+
+	private note(g: SVGGElement, c: Component) {
+		const { lines, w, h } = this.noteSize(c), col = NOTE_COLORS.includes(c.color ?? "") ? c.color : "yellow";
+		const r = el(g, "rect", { x: c.x, y: c.y, width: w, height: h, rx: 4, class: "dcw-note" });
+		r.style.fill = `rgba(var(--color-${col}-rgb), 0.2)`;
+		r.style.stroke = `rgb(var(--color-${col}-rgb))`;
+		lines.forEach((l, i) => el(g, "text", { x: c.x + 8, y: c.y + 20 + i * 16, class: c.text ? "dcw-notetext" : "dcw-notetext is-empty" }, l));
+	}
+
+	/** An input next to each cavity of the selected connector or terminal: type "C2:3" and Enter to wire it there. */
+	private destinations(c?: Component) {
+		if (!c || (c.kind !== "connector" && c.kind !== "terminal")) return;
+		const h = this.host.h, nets = computeNets(h);
+		this.targets.empty();
+		for (const o of h.components) for (let p = 1; p <= o.pins && o.kind !== "harness"; p++) {
+			if (o.nc?.includes(p) || o === c) continue;
+			const sig = netSignals(h, { c: o.id, pin: p }, nets)[0];
+			this.targets.createEl("option", { value: o.pins === 1 ? o.id : `${o.id}:${cavName(o, p)}`, attr: { label: [compLabel(h, o), o.pins > 1 && cavName(o, p), sig].filter(Boolean).join(" · ") } });
+		}
+		for (let p = 1; p <= c.pins; p++) {
+			if (c.nc?.includes(p)) continue;
+			const fo = el(this.g, "foreignObject", { x: c.x + W + 10, y: c.y + HDR + (p - 1) * ROW + 1, width: 110, height: ROW - 2, "data-dest": p });
+			const input = fo.appendChild(createEl("input", { cls: "dcw-dest", attr: { placeholder: "→ destination", list: this.targets.id } }));
+			input.onkeydown = e => {
+				if (e.key === "Escape") input.blur();
+				if (e.key !== "Enter" || !input.value.trim()) return;
+				const to = resolveTarget(h, input.value);
+				if (typeof to === "string") return void new Notice(`DC Wiring: ${to}`);
+				if (pinKey(to) === `${c.id}:${p}`) return;
+				h.wires.push({ id: nextId(h, "W", h.wires), from: { c: c.id, pin: p }, to, color: "black", gauge: "", length: 0 });
+				this.host.changed();
+				// keep typing: on to the next cavity
+				(this.g.querySelector(`[data-dest="${p + 1}"] input`) as HTMLInputElement | null)?.focus();
+			};
+		}
 	}
 
 	/** Everything a component draws: box, labels, part label and pin grid. The one place for this size. */
 	private extent(c: Component): Rect {
 		if (c.kind === "splice") return { x1: c.x - 12, y1: c.y - 24, x2: c.x + 12, y2: c.y + 26 };
+		if (twoPin(c)) return { x1: c.x - 4, y1: c.y - 20, x2: c.x + DW + 4, y2: c.y + 36 };
+		if (c.kind === "note") { const s = this.noteSize(c); return { x1: c.x, y1: c.y, x2: c.x + s.w, y2: c.y + s.h }; }
 		const hasPart = this.host.h.parts.some(p => p.id === c.partId);
 		let x1 = c.x, x2 = c.x + W, y2 = c.y + HDR + c.pins * ROW + (hasPart ? 18 : 0);
 		if (c.kind === "cable" && c.shield) y2 += ROW;
@@ -221,9 +411,9 @@ export class Schematic {
 		return { x1, y1: c.y, x2, y2 };
 	}
 
-	/** Area auto route keeps wires out of. Splices are not obstacles: wires meet there. */
+	/** Area auto route keeps wires out of. Splices, diodes and resistors are not obstacles: wires meet there. Notes neither. */
 	private box(c: Component): Rect | undefined {
-		if (c.kind === "splice") return;
+		if (c.kind !== "connector" && c.kind !== "terminal" && c.kind !== "harness") return;
 		const e = this.extent(c), m = 12; // < STUB, so a wire's own stub point stays outside its connector
 		return { x1: e.x1 - m, y1: e.y1 - m, x2: e.x2 + m, y2: e.y2 + m };
 	}
@@ -272,40 +462,55 @@ export class Schematic {
 		for (let p = 1; p <= c.pins; p++) {
 			const cx = left + 4 + ((p - 1) % cols) * CELL + CELL / 2, cy = top + 4 + Math.floor((p - 1) / cols) * CELL + CELL / 2;
 			const w = this.host.h.wires.find(w => (w.from.c === c.id && w.from.pin === p) || (w.to.c === c.id && w.to.pin === p));
-			const cav = el(g, "circle", { cx, cy, r: 7, class: "dcw-pin dcw-cavity", "data-pin": p, "data-comp": c.id, "data-row": p });
+			const cav = el(g, "circle", c.nc?.includes(p) ? { cx, cy, r: 7, class: "dcw-cavity is-nc", "data-row": p }
+				: { cx, cy, r: 7, class: "dcw-pin dcw-cavity", "data-pin": p, "data-comp": c.id, "data-row": p });
 			if (w) { cav.style.stroke = wireColors(effectiveWire(this.host.h, w).color)[0]; cav.addClass("is-wired"); } // inline: beats the .dcw-pin stroke
 			if (lit && w && !lit.has(w.id)) cav.addClass("is-dim");
-			el(g, "text", { x: cx, y: cy + 3, class: "dcw-cavno" }, String(p));
+			el(g, "text", { x: cx, y: cy + 3, class: "dcw-cavno" }, cavName(c, p));
 		}
 	}
 
 	private down(e: PointerEvent) {
-		if (e.button !== 0) return;
 		const t = e.target as Element;
+		if ((e.button !== 0 && e.button !== 1) || t.closest("foreignObject")) return;
 		const p = this.world(e);
 		const pin = t.closest("[data-pin]");
 		const comp = t.closest("[data-comp]");
 		const wire = t.closest("[data-wire]");
+		const mate = t.closest("[data-mate]");
 		this.svg.setPointerCapture(e.pointerId);
 		const bp = this.bendPoint(t);
+		const sel = this.host.sel, cur = selComps(sel);
 		const hdr = this.host.h.groups?.find(g => g.id === t.closest("[data-group-hdr]")?.getAttribute("data-group-hdr"));
 		const img = this.host.h.images?.find(i => i.id === t.closest("[data-img]")?.getAttribute("data-img"));
-		if (bp) {
+		if (e.button === 1) { // middle-drag pans
+			this.drag = { mode: "pan", sx: e.clientX, sy: e.clientY, px: this.view.x, py: this.view.y };
+		} else if (bp) {
 			this.drag = { mode: "bend", w: bp.w, i: bp.i, moved: false };
 		} else if (hdr) {
 			this.drag = { mode: "group", g: hdr, sx: p.x, sy: p.y, ox: 0, oy: 0 };
 		} else if (img) {
 			this.drag = { mode: "image", img, dx: p.x - img.x, dy: p.y - img.y, resize: t.hasAttribute("data-img-resize"), moved: false };
+		} else if (mate) {
+			const line = el(this.g, "line", { x1: p.x, y1: p.y, x2: p.x, y2: p.y, class: "dcw-temp is-mate" });
+			this.drag = { mode: "wire", from: { c: mate.getAttribute("data-mate")!, pin: 0 }, line, kind: "mate" };
 		} else if (pin) {
 			const from = { c: pin.getAttribute("data-comp")!, pin: Number(pin.getAttribute("data-pin")) };
-			const line = el(this.g, "line", { x1: pin.getAttribute("cx")!, y1: pin.getAttribute("cy")!, x2: p.x, y2: p.y, class: "dcw-temp" });
-			this.drag = { mode: "wire", from, line };
+			const kind = e.metaKey || e.ctrlKey ? "move" : "wire";
+			const line = el(this.g, "line", { x1: pin.getAttribute("cx")!, y1: pin.getAttribute("cy")!, x2: p.x, y2: p.y, class: kind === "move" ? "dcw-temp is-move" : "dcw-temp" });
+			this.drag = { mode: "wire", from, line, kind };
 		} else if (comp) {
-			const c = this.host.h.components.find(c => c.id === comp.getAttribute("data-comp"))!;
-			if (!isLocked(this.host.h, c.id)) this.drag = { mode: "move", id: c.id, dx: p.x - c.x, dy: p.y - c.y, moved: false };
-			this.host.select({ component: c.id });
+			const id = comp.getAttribute("data-comp")!;
+			if (e.shiftKey) return this.selectComps(cur.includes(id) ? cur.filter(x => x !== id) : [...cur, id]);
+			const ids = cur.includes(id) && cur.length > 1 ? cur : [id];
+			if (!ids.some(x => isLocked(this.host.h, x))) this.drag = { mode: "move", sx: p.x, sy: p.y, items: this.moveItems(ids), moved: false };
+			if (ids.length === 1) this.host.select({ component: id });
 		} else if (wire) {
-			this.host.select({ wires: [wire.getAttribute("data-wire")!] });
+			const id = wire.getAttribute("data-wire")!, ws = sel?.wires ?? [];
+			if (!e.shiftKey) this.host.select({ wires: [id] });
+			else this.host.select({ ...sel, wires: ws.includes(id) ? ws.filter(x => x !== id) : [...ws, id] });
+		} else if (e.shiftKey) {
+			this.drag = { mode: "box", x: p.x, y: p.y, rect: el(this.g, "rect", { x: p.x, y: p.y, width: 0, height: 0, class: "dcw-box" }) };
 		} else {
 			this.drag = { mode: "pan", sx: e.clientX, sy: e.clientY, px: this.view.x, py: this.view.y };
 			if (this.host.sel) this.host.select(null);
@@ -332,9 +537,15 @@ export class Schematic {
 			d.moved = true;
 			this.render();
 		} else if (d.mode === "move") {
-			const p = this.world(e), c = this.host.h.components.find(c => c.id === d.id)!;
-			const x = snap(p.x - d.dx), y = snap(p.y - d.dy);
-			if (x !== c.x || y !== c.y) { c.x = x; c.y = y; d.moved = true; this.render(); }
+			const p = this.world(e), dx = snap(p.x - d.sx), dy = snap(p.y - d.sy), first = d.items[0];
+			if (first && (first.o.x !== first.x + dx || first.o.y !== first.y + dy)) {
+				for (const it of d.items) { it.o.x = it.x + dx; it.o.y = it.y + dy; }
+				d.moved = true;
+				this.render();
+			}
+		} else if (d.mode === "box") {
+			const p = this.world(e);
+			for (const [k, v] of Object.entries({ x: Math.min(p.x, d.x), y: Math.min(p.y, d.y), width: Math.abs(p.x - d.x), height: Math.abs(p.y - d.y) })) d.rect.setAttribute(k, String(v));
 		} else {
 			const p = this.world(e);
 			d.line.setAttribute("x2", String(p.x));
@@ -348,13 +559,30 @@ export class Schematic {
 		if (!d) return;
 		if ((d.mode === "move" || d.mode === "bend" || d.mode === "image") && d.moved) this.host.changed();
 		if (d.mode === "group" && (d.ox || d.oy)) this.host.changed();
+		const h = this.host.h;
+		if (d.mode === "box") {
+			d.rect.remove();
+			const p = this.world(e), x1 = Math.min(p.x, d.x), x2 = Math.max(p.x, d.x), y1 = Math.min(p.y, d.y), y2 = Math.max(p.y, d.y);
+			const hit = h.components.filter(c => { const r = this.extent(c); return r.x1 >= x1 && r.x2 <= x2 && r.y1 >= y1 && r.y2 <= y2; }).map(c => c.id);
+			return this.selectComps([...new Set([...selComps(this.host.sel), ...hit])]);
+		}
 		if (d.mode !== "wire") return;
 		d.line.remove();
-		const pin = document.elementFromPoint(e.clientX, e.clientY)?.closest("[data-pin]");
+		const under = document.elementFromPoint(e.clientX, e.clientY);
+		if (d.kind === "mate") {
+			const other = h.components.find(c => c.id === under?.closest("[data-comp]")?.getAttribute("data-comp"));
+			const pair = (m: { a: string; b: string }) => [m.a, m.b].includes(d.from.c) && [m.a, m.b].includes(other!.id);
+			if (other?.kind !== "connector" || other.id === d.from.c || h.mates?.some(pair)) return;
+			h.mates = [...h.mates ?? [], { a: d.from.c, b: other.id }];
+			const err = mateError(h, h.mates[h.mates.length - 1]);
+			if (err) new Notice(`DC Wiring: ${d.from.c} and ${other.id} ${err}; their pins are not joined.`);
+			return this.host.changed();
+		}
+		const pin = under?.closest("[data-pin]");
 		if (!pin) return;
 		const to = { c: pin.getAttribute("data-comp")!, pin: Number(pin.getAttribute("data-pin")) };
 		if (pinKey(to) === pinKey(d.from)) return;
-		const h = this.host.h;
+		if (d.kind === "move") return void (moveConnections(h, d.from, to) && this.host.changed());
 		const id = nextId(h, "W", h.wires);
 		const core = coreOf(h, d.from) ?? coreOf(h, to); // a wire onto a cable core is that core's end
 		h.wires.push({ id, from: d.from, to, color: core?.color || "black", gauge: core?.gauge ?? "", length: 0 });
@@ -408,8 +636,9 @@ export class Schematic {
 	}
 
 	private menu(e: MouseEvent) {
-		e.preventDefault();
 		const t = e.target as Element, h = this.host.h, m = new Menu();
+		if (t.closest("foreignObject")) return; // destination input: the normal text menu
+		e.preventDefault();
 		const wire = t.closest("[data-wire]")?.getAttribute("data-wire");
 		const c = h.components.find(c => c.id === t.closest("[data-comp]")?.getAttribute("data-comp"));
 		if (this.extraMenu(m, t, wire, c)) return m.showAtMouseEvent(e);
@@ -424,6 +653,43 @@ export class Schematic {
 				this.host.changed();
 			}));
 		} else if (c) {
+			const row = Number(t.closest("[data-row]")?.getAttribute("data-row"));
+			if (row && (c.kind === "connector" || c.kind === "terminal")) {
+				const nc = c.nc?.includes(row), global = c.globals?.includes(row);
+				m.addItem(i => i.setTitle("Edit signal").setIcon("tag").onClick(() => this.host.editSignal(c, row)));
+				if (c.signals?.[row]) m.addItem(i => i.setTitle(global ? "Make signal local" : "Make signal global").setIcon("globe").onClick(() => {
+					toggleIn(c, "globals", row);
+					this.host.changed();
+				}));
+				m.addItem(i => i.setTitle(nc ? "Clear not connected" : "Mark as not connected").setIcon("circle-slash").onClick(() => {
+					if (!nc && h.wires.some(w => pinKey(w.from) === `${c.id}:${row}` || pinKey(w.to) === `${c.id}:${row}`)) return void new Notice("DC Wiring: remove the wires on this cavity first.");
+					toggleIn(c, "nc", row);
+					this.host.changed();
+				}));
+				m.addSeparator();
+			}
+			const many = selComps(this.host.sel);
+			if (many.length > 1 && many.includes(c.id)) {
+				m.addItem(i => i.setTitle(`Duplicate ${many.length} components`).setIcon("copy").onClick(() => {
+					this.host.sel = { components: duplicate(h, many) };
+					this.host.changed();
+				}));
+				m.addItem(i => i.setTitle(`Delete ${many.length} components`).setIcon("trash").onClick(() => {
+					for (const id of many) removeComponent(h, id);
+					this.host.sel = null;
+					this.host.changed();
+				}));
+				m.addSeparator();
+			}
+			if (c.kind === "diode") m.addItem(i => i.setTitle("Flip direction").setIcon("arrow-left-right").onClick(() => {
+				if (c.flipped) delete c.flipped; else c.flipped = true;
+				this.host.changed();
+			}));
+			for (const mt of h.mates ?? []) if (mt.a === c.id || mt.b === c.id) m.addItem(i => i.setTitle(`Unmate ${mt.a === c.id ? mt.b : mt.a}`).setIcon("unlink").onClick(() => {
+				h.mates = h.mates!.filter(x => x !== mt);
+				if (!h.mates.length) delete h.mates;
+				this.host.changed();
+			}));
 			const kind = c.kind === "harness" ? "sub-harness" : c.kind;
 			if (c.kind === "harness") m.addItem(i => i.setTitle("Open sub-harness").setIcon("file-symlink").onClick(() => this.host.openSub(c)));
 			m.addItem(i => i.setTitle(`Edit ${kind}`).setIcon("pencil").onClick(() => this.host.editComponent(c)));
@@ -436,9 +702,13 @@ export class Schematic {
 		} else {
 			const p = this.world(e);
 			m.addItem(i => i.setTitle("Add connector").setIcon("plug").onClick(() => this.add("connector", p.x, p.y)));
+			m.addItem(i => i.setTitle("Add terminal").setIcon("circle-dot").onClick(() => this.add("terminal", p.x, p.y)));
 			m.addItem(i => i.setTitle("Add splice").setIcon("git-merge").onClick(() => this.add("splice", p.x, p.y)));
 			m.addItem(i => i.setTitle("Add cable").setIcon("cable").onClick(() => this.addCable(p.x, p.y)));
 			m.addItem(i => i.setTitle("Add image…").setIcon("image").onClick(() => this.host.addImage(snap(p.x), snap(p.y))));
+			m.addItem(i => i.setTitle("Add diode").setIcon("triangle-right").onClick(() => this.add("diode", p.x, p.y)));
+			m.addItem(i => i.setTitle("Add resistor").setIcon("rectangle-horizontal").onClick(() => this.add("resistor", p.x, p.y)));
+			m.addItem(i => i.setTitle("Add note").setIcon("sticky-note").onClick(() => this.add("note", p.x, p.y)));
 			m.addItem(i => i.setTitle("Add sub-harness…").setIcon("layers").onClick(() => this.host.addSub(snap(p.x), snap(p.y))));
 			m.addItem(i => i.setTitle("Fit to view").setIcon("maximize").onClick(() => this.fit()));
 		}
@@ -451,11 +721,13 @@ export class Schematic {
 		return { x: snap((r.width / 2 - this.view.x) / this.view.z), y: snap((r.height / 2 - this.view.y) / this.view.z) };
 	}
 
-	add(kind: Component["kind"], x?: number, y?: number) {
+	add(kind: Exclude<Component["kind"], "harness" | "cable">, x?: number, y?: number) {
 		const h = this.host.h;
 		if (x === undefined || y === undefined) ({ x, y } = this.center());
-		const id = nextId(h, kind === "splice" ? "S" : "C", h.components);
-		h.components.push({ id, kind, name: kind === "splice" ? id : "Connector", x: snap(x), y: snap(y), pins: kind === "splice" ? 1 : 4 });
+		const id = nextId(h, PREFIX[kind], h.components);
+		const pins = { connector: 4, splice: 1, terminal: 1, diode: 2, resistor: 2, note: 0 }[kind];
+		// name = id means "no label"; the label is set in the edit dialog
+		h.components.push({ id, kind, name: id, x: snap(x), y: snap(y), pins, ...kind === "terminal" ? { terminal: "ring" } : {} });
 		this.host.sel = { component: id };
 		this.host.changed();
 	}

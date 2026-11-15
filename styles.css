@@ -110,3 +110,33 @@
 .dcw-libs > * { margin-right: 4px; }
 .dcw-row-actions { white-space: nowrap; }
 .dcw-config-item { padding-left: 16px; }
+/* schematic completeness: overlays, new components, selection */
+.dcw-schematic { position: relative; width: 100%; height: 100%; }
+.dcw-toggles { position: absolute; right: 8px; bottom: 8px; display: flex; gap: 4px; }
+.dcw-toggles button { font-size: var(--font-ui-smaller); padding: 2px 8px; height: auto; }
+.dcw-toggles button.is-active { background: var(--interactive-accent); color: var(--text-on-accent); }
+.dcw-search { position: absolute; left: 8px; top: 8px; width: 260px; background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: var(--radius-s); padding: 4px; }
+.dcw-search.is-hidden { display: none; }
+.dcw-search input { width: 100%; }
+.dcw-results { max-height: 240px; overflow: auto; }
+.dcw-results > div { padding: 2px 6px; cursor: pointer; font-size: var(--font-ui-small); border-radius: var(--radius-s); }
+.dcw-results > div:hover { background: var(--background-modifier-hover); }
+.dcw-comp.is-dim { opacity: 0.2; }
+.dcw-box { fill: var(--interactive-accent); fill-opacity: 0.1; stroke: var(--interactive-accent); stroke-dasharray: 4 3; pointer-events: none; }
+.dcw-temp.is-move { stroke-dasharray: 1 5; stroke-width: 3; }
+.dcw-temp.is-mate { stroke: var(--text-accent); }
+.dcw-signal.is-nc { fill: var(--text-faint); }
+.dcw-signal.is-global { fill: var(--text-accent); }
+.dcw-signal.is-conflict { fill: var(--text-error); }
+.dcw-cavity.is-nc { fill: var(--background-modifier-border); stroke: var(--text-faint); stroke-width: 1; opacity: 0.6; }
+.dcw-grab { fill: transparent; }
+.dcw-lead { stroke: var(--text-muted); stroke-width: 1.5; }
+.dcw-symbol { fill: var(--background-secondary); stroke: var(--text-normal); stroke-width: 1.5; }
+.dcw-comp.is-selected .dcw-symbol, .dcw-comp.is-selected .dcw-note { stroke: var(--interactive-accent); stroke-width: 2; }
+.dcw-notetext { fill: var(--text-normal); font-size: 12px; }
+.dcw-notetext.is-empty { fill: var(--text-faint); font-style: italic; }
+.dcw-matehandle { fill: var(--background-primary); stroke: var(--text-accent); cursor: alias; }
+.dcw-mate path { fill: none; stroke: var(--text-accent); stroke-width: 2; stroke-dasharray: 6 3; }
+.dcw-mate.is-error path { stroke: var(--text-error); }
+.dcw-mate.is-error text { fill: var(--text-error); }
+.dcw-dest { width: 100%; height: 100%; font-size: 11px; padding: 0 4px; }

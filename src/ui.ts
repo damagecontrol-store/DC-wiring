@@ -6,6 +6,7 @@ export interface Field {
 	value: string;
 	options?: Record<string, string>; // value -> label; turns the field into a dropdown
 	preview?: (v: string) => string; // shown under the field while typing, e.g. the result of a calculation
+	multiline?: boolean; // text area: Enter adds a line instead of saving
 }
 
 /** One small form for every edit dialog. Calls onSubmit with the edited values. */
@@ -22,6 +23,7 @@ export class FormModal extends Modal {
 			values[f.key] = f.value;
 			const s = new Setting(this.contentEl).setName(f.label);
 			if (f.options) s.addDropdown(d => d.addOptions(f.options!).setValue(f.value).onChange(v => values[f.key] = v));
+			else if (f.multiline) s.addTextArea(t => t.setValue(f.value).onChange(v => values[f.key] = v));
 			else s.addText(t => {
 				t.setValue(f.value).onChange(v => { values[f.key] = v; if (f.preview) s.setDesc(f.preview(v)); });
 				if (f.preview) s.setDesc(f.preview(f.value));

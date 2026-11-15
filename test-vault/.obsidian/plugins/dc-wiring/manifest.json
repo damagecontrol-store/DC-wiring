@@ -1,9 +1,0 @@
-{
-  "id": "dc-wiring",
-  "name": "DC Wiring",
-  "version": "0.1.0",
-  "minAppVersion": "1.5.0",
-  "description": "Design automotive wire harnesses: schematic, connections list and BOM.",
-  "author": "DC",
-  "isDesktopOnly": false
-}

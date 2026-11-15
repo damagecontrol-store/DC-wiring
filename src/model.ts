@@ -4,7 +4,10 @@ import { wireLength } from "./bundles.ts";
 import { loadedParts, effectiveWire } from "./parts.ts";
 import type { GaugeUnit, LengthUnit } from "./units.ts";
 
-export type Kind = "connector" | "splice" | "harness" | "cable"; // harness = sub-harness block
+export type Kind = "connector" | "splice" | "harness" | "cable" | "terminal" | "diode" | "resistor" | "note"; // harness = sub-harness block
+const KINDS: Kind[] = ["connector", "splice", "harness", "cable", "terminal", "diode", "resistor", "note"];
+// pin counts fixed by the kind; diode/resistor: 1 = left side, 2 = right side
+const FIXED_PINS: Partial<Record<Kind, number>> = { splice: 1, terminal: 1, diode: 2, resistor: 2, note: 0 };
 
 export interface Component {
 	id: string; // C1, S1
@@ -25,6 +28,13 @@ export interface Component {
 	length?: number; // cable: mm, counted in the BOM as metres
 	pos?: { x: number; y: number }; // centre on the Layout view; unset = its schematic x, y
 	config?: string; // name of the part's configuration in use; the part's first one when unset
+	cavities?: string[]; // cavity designations per pin ("A1"); empty or missing = the pin number
+	nc?: number[]; // pins marked not connected: no wires allowed
+	globals?: number[]; // pins whose signal is global: same name anywhere = same net
+	terminal?: string; // terminal type: ferrule, ring, spade, male QC, female QC, loose end
+	flipped?: boolean; // diode: cathode on the left
+	text?: string; // note text
+	color?: string; // note colour (Obsidian colour name: yellow, red, ...)
 }
 
 export interface Core { color: string; gauge: string }
@@ -119,6 +129,7 @@ export interface Harness {
 	export?: { company?: string; title?: string; drawing?: string; date?: string; drawnBy?: string; notes?: string }; // title block and notes of exported drawings
 	groups?: Group[];
 	images?: CanvasImage[];
+	mates?: { a: string; b: string }[]; // mated connectors: pin n of a is pin n of b
 }
 
 export const emptyHarness = (): Harness => ({ version: 1, components: [], wires: [], parts: [] });
@@ -133,10 +144,10 @@ export function parseHarness(text: string): Harness {
 	if (!h || typeof h !== "object" || Array.isArray(h)) throw new Error("not a harness object");
 	const isEnd = (e: unknown) => !!e && typeof (e as End).c === "string" && typeof (e as End).pin === "number";
 	const components = (h.components ?? []).map(c => {
-		if (typeof c?.id !== "string" || !["connector", "splice", "harness", "cable"].includes(c.kind)) throw new Error(`component ${c?.id ?? "?"} needs an id and a kind`);
+		if (typeof c?.id !== "string" || !KINDS.includes(c.kind)) throw new Error(`component ${c?.id ?? "?"} needs an id and a kind`);
 		return {
 			...c, name: c.name ?? c.id, x: c.x ?? 0, y: c.y ?? 0,
-			pins: c.kind === "splice" ? 1 : c.kind === "harness" ? (c.ports ?? []).length : c.kind === "cable" ? (c.cores ?? []).length : Math.max(1, c.pins || 1),
+			pins: c.kind === "harness" ? (c.ports ?? []).length : c.kind === "cable" ? (c.cores ?? []).length : FIXED_PINS[c.kind] ?? Math.max(1, c.pins || 1),
 		};
 	});
 	const wires = (h.wires ?? []).map(w => {
@@ -188,6 +199,17 @@ export function computeNets(h: Harness): Map<string, number> {
 		return r;
 	};
 	for (const w of h.wires) parent.set(find(pinKey(w.from)), find(pinKey(w.to)));
+	// diodes and resistors need nothing here: their two sides are separate pins, so nets stop there
+	for (const m of h.mates ?? []) {
+		const a = h.components.find(c => c.id === m?.a), b = h.components.find(c => c.id === m?.b);
+		if (a && b && a.pins === b.pins) for (let p = 1; p <= a.pins; p++) parent.set(find(`${a.id}:${p}`), find(`${b.id}:${p}`));
+	}
+	const global = new Map<string, string>();
+	for (const c of h.components) for (const p of c.globals ?? []) {
+		const s = c.signals?.[p], k = `${c.id}:${p}`;
+		if (!s) continue;
+		if (global.has(s)) parent.set(find(k), find(global.get(s)!)); else { global.set(s, k); find(k); }
+	}
 	const ids = new Map<string, number>();
 	const out = new Map<string, number>();
 	for (const k of parent.keys()) {
@@ -199,12 +221,13 @@ export function computeNets(h: Harness): Map<string, number> {
 }
 
 /** Wires electrically connected to anything in the selection. */
-export function netWires(h: Harness, sel: { wires?: string[]; component?: string }): Set<string> {
+export function netWires(h: Harness, sel: { wires?: string[]; component?: string; components?: string[] }): Set<string> {
 	const nets = computeNets(h);
 	const hit = new Set<number>();
 	for (const w of h.wires) {
 		if (sel.wires?.includes(w.id)) hit.add(nets.get(pinKey(w.from))!);
 		if (sel.component && (w.from.c === sel.component || w.to.c === sel.component)) hit.add(nets.get(pinKey(w.from))!);
+		if (sel.components?.includes(w.from.c) || sel.components?.includes(w.to.c)) hit.add(nets.get(pinKey(w.from))!);
 	}
 	return new Set(h.wires.filter(w => hit.has(nets.get(pinKey(w.from))!)).map(w => w.id));
 }
@@ -242,6 +265,7 @@ export function removeComponent(h: Harness, id: string) {
 	h.wires = h.wires.filter(w => w.from.c !== id && w.to.c !== id);
 	if (h.groups) h.groups = h.groups.filter(g => (g.members = g.members.filter(m => m !== id)).length);
 	if (h.bundles) h.bundles = h.bundles.filter(b => b.from !== id && b.to !== id);
+	if (h.mates) h.mates = h.mates.filter(m => m.a !== id && m.b !== id);
 }
 
 export function removePart(h: Harness, id: string) {
