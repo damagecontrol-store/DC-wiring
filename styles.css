@@ -62,3 +62,10 @@
 .dcw-parents { color: var(--text-muted); font-size: var(--font-ui-smaller); margin-left: 8px; }
 .dcw-section td { color: var(--text-muted); font-weight: 600; padding-top: 10px; }
 .dcw-readonly td { color: var(--text-muted); padding: 6px 8px; }
+
+/* wiring tables on the canvas */
+.dcw-wt { cursor: grab; }
+.dcw-wt-body { fill: var(--background-primary); stroke: var(--text-faint); }
+.dcw-wt-head { fill: var(--text-muted); font-size: 10px; font-weight: 600; }
+.dcw-wt-cell { fill: var(--text-normal); font-size: 10px; }
+.dcw-wt-tether { stroke: var(--text-faint); stroke-dasharray: 3 3; }

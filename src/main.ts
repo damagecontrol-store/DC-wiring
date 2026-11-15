@@ -1,5 +1,6 @@
-import { Plugin, TFile, TFolder } from "obsidian";
+import { Platform, Plugin, TFile, TFolder } from "obsidian";
 import { emptyHarness, parseHarness, relinkSub } from "./model.ts";
+import { EXPORTS } from "./output.ts";
 import { freePath } from "./ui.ts";
 import { HarnessView, VIEW_TYPE } from "./view.ts";
 
@@ -9,6 +10,12 @@ export default class DCWiringPlugin extends Plugin {
 		this.registerExtensions(["harness"], VIEW_TYPE);
 		this.addRibbonIcon("cable", "New harness", () => this.create());
 		this.addCommand({ id: "new-harness", name: "New harness", callback: () => this.create() });
+		for (const x of EXPORTS) this.addCommand({ id: x.id, name: x.name, checkCallback: check => {
+			const v = this.app.workspace.getActiveViewOfType(HarnessView);
+			if (!v || (x.desktop && !Platform.isDesktopApp)) return false;
+			if (!check) void x.run(v);
+			return true;
+		} });
 		// keep sub-harness links working when a .harness file is renamed or moved
 		this.registerEvent(this.app.vault.on("rename", async (file, oldPath) => {
 			if (!(file instanceof TFile) || file.extension !== "harness") return;

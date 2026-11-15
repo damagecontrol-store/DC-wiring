@@ -52,10 +52,10 @@ export function wireColors(color: string): [string, string | undefined] {
 	return [base && isColor(base) ? base : "grey", stripe && isColor(stripe) ? stripe : undefined];
 }
 
-/** First unused path for a new harness: "<name>.harness", then "<name> 2.harness", ... */
-export function freePath(app: App, dir: string, name: string): string {
+/** First unused path for a new file: "<name>.harness", then "<name> 2.harness", ... */
+export function freePath(app: App, dir: string, name: string, ext = "harness"): string {
 	for (let n = 1; ; n++) {
-		const path = normalizePath(`${dir}/${name}${n > 1 ? " " + n : ""}.harness`);
+		const path = normalizePath(`${dir}/${name}${n > 1 ? " " + n : ""}.${ext}`);
 		if (!app.vault.getAbstractFileByPath(path)) return path;
 	}
 }

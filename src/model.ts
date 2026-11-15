@@ -15,6 +15,7 @@ export interface Component {
 	exposed?: boolean; // connector: its pins show on the block when this harness is used as a sub-harness
 	file?: string; // sub-harness block: vault path of the .harness file
 	ports?: string[]; // sub-harness block: "C4:1" per pin, in pin order. Only grows, so pin numbers stay stable
+	wiringTable?: { dx: number; dy: number }; // schematic: wiring table shown at this offset from the component
 }
 
 export interface End { c: string; pin: number }
@@ -46,6 +47,7 @@ export interface Harness {
 	parts: Part[];
 	hideWireIds?: boolean; // canvas: don't label unnamed wires with their id
 	seq?: Record<string, number>; // last id number handed out per prefix, so deleted ids are never reused
+	export?: { company?: string; title?: string; drawing?: string; date?: string; drawnBy?: string; notes?: string }; // title block and notes of exported drawings
 }
 
 export const emptyHarness = (): Harness => ({ version: 1, components: [], wires: [], parts: [] });

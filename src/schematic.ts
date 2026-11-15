@@ -2,6 +2,7 @@ import { Menu } from "obsidian";
 import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, signalOf, wireLabel, type Component, type End, type Harness, type Wire } from "./model.ts";
 import { insertIndex, labelPoint, orthoPoints, roundedPath, routeAround, separate, STUB, type P, type Rect } from "./route.ts";
 import { wireColors } from "./ui.ts";
+import { drawWiringTables, wiringTableItem } from "./wiringtable.ts";
 
 const NS = "http://www.w3.org/2000/svg";
 export const W = 140, HDR = 24, ROW = 20, GRID = 20, CELL = 18;
@@ -174,6 +175,7 @@ export class Schematic {
 			if (part) el(g, "text", { x: c.x, y: c.y + hgt + 14, class: "dcw-part" }, `${part.number}${part.manufacturer ? " · " + part.manufacturer : ""}`);
 			if (c.layout) this.face(g, c, faceTop(c, !!part), lit);
 		}
+		drawWiringTables(this.g, this.host);
 		// bend point handles of the selected wire, on top of everything
 		for (const w of h.wires) if (sel?.wires?.includes(w.id)) (w.points ?? []).forEach((p, i) =>
 			el(this.g, "rect", { x: p.x - 4, y: p.y - 4, width: 8, height: 8, class: "dcw-wp", "data-wp": `${w.id}:${i}` }));
@@ -380,6 +382,7 @@ export class Schematic {
 			const kind = c.kind === "harness" ? "sub-harness" : c.kind;
 			if (c.kind === "harness") m.addItem(i => i.setTitle("Open sub-harness").setIcon("file-symlink").onClick(() => this.host.openSub(c)));
 			m.addItem(i => i.setTitle(`Edit ${kind}`).setIcon("pencil").onClick(() => this.host.editComponent(c)));
+			wiringTableItem(m, c, this.host);
 			m.addItem(i => i.setTitle(c.kind === "harness" ? "Remove sub-harness (keeps its file)" : `Delete ${kind}`).setIcon("trash").onClick(() => {
 				removeComponent(h, c.id);
 				this.host.sel = null;
