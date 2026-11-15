@@ -1,0 +1,18 @@
+import esbuild from "esbuild";
+import { cpSync, mkdirSync } from "node:fs";
+
+const outdir = "test-vault/.obsidian/plugins/dc-wiring";
+mkdirSync(outdir, { recursive: true });
+const copy = { name: "copy", setup(b) { b.onEnd(() => { for (const f of ["manifest.json", "styles.css"]) cpSync(f, `${outdir}/${f}`); }); } };
+
+const ctx = await esbuild.context({
+  entryPoints: ["src/main.ts"],
+  bundle: true,
+  format: "cjs",
+  target: "es2020",
+  external: ["obsidian", "electron"],
+  outfile: `${outdir}/main.js`,
+  plugins: [copy],
+  logLevel: "info",
+});
+if (process.argv[2] === "watch") await ctx.watch(); else { await ctx.rebuild(); await ctx.dispose(); }
