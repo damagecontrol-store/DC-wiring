@@ -1,4 +1,4 @@
-import { App, Modal, normalizePath, Setting } from "obsidian";
+import { App, FuzzySuggestModal, Modal, normalizePath, Setting } from "obsidian";
 
 export interface Field {
 	key: string;
@@ -58,4 +58,15 @@ export function freePath(app: App, dir: string, name: string): string {
 		const path = normalizePath(`${dir}/${name}${n > 1 ? " " + n : ""}.harness`);
 		if (!app.vault.getAbstractFileByPath(path)) return path;
 	}
+}
+
+/** Fuzzy list to pick one item from. */
+export class Picker<T> extends FuzzySuggestModal<T> {
+	constructor(app: App, placeholder: string, private items: T[], private text: (t: T) => string, private done: (t: T) => void) {
+		super(app);
+		this.setPlaceholder(placeholder);
+	}
+	getItems() { return this.items; }
+	getItemText(t: T) { return this.text(t); }
+	onChooseItem(t: T) { this.done(t); }
 }

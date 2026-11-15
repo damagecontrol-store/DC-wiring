@@ -1,6 +1,6 @@
 // Harness document model. Stored as pretty JSON in a .harness file.
 
-export type Kind = "connector" | "splice" | "harness"; // harness = sub-harness block
+export type Kind = "connector" | "splice" | "harness" | "cable"; // harness = sub-harness block
 
 export interface Component {
 	id: string; // C1, S1
@@ -15,7 +15,12 @@ export interface Component {
 	exposed?: boolean; // connector: its pins show on the block when this harness is used as a sub-harness
 	file?: string; // sub-harness block: vault path of the .harness file
 	ports?: string[]; // sub-harness block: "C4:1" per pin, in pin order. Only grows, so pin numbers stay stable
+	cores?: Core[]; // cable: core n is pin n ("CB1.n"); wires on both sides of a core share its pin, so nets pass through
+	shield?: boolean; // cable: pin 0 is the shield, so adding cores never renumbers it
+	length?: number; // cable: mm, counted in the BOM as metres
 }
+
+export interface Core { color: string; gauge: string }
 
 export interface End { c: string; pin: number }
 
@@ -29,7 +34,14 @@ export interface Wire {
 	length: number; // mm
 	partId?: string;
 	points?: { x: number; y: number }[]; // schematic bend points, in order from -> to
+	twist?: string; // wires with the same id are twisted together
+	ident?: { label?: string; colors?: string[] }; // marking printed on the wire
 }
+
+/** Named frame around components, e.g. a device (ECU, fuse box) the harness plugs into. */
+export interface Group { id: string; name: string; members: string[]; partId?: string; locked?: boolean }
+
+export interface CanvasImage { id: string; path: string; x: number; y: number; w: number; h: number } // path: vault file
 
 export interface Part {
 	id: string;
@@ -46,6 +58,8 @@ export interface Harness {
 	parts: Part[];
 	hideWireIds?: boolean; // canvas: don't label unnamed wires with their id
 	seq?: Record<string, number>; // last id number handed out per prefix, so deleted ids are never reused
+	groups?: Group[];
+	images?: CanvasImage[];
 }
 
 export const emptyHarness = (): Harness => ({ version: 1, components: [], wires: [], parts: [] });
@@ -60,10 +74,10 @@ export function parseHarness(text: string): Harness {
 	if (!h || typeof h !== "object" || Array.isArray(h)) throw new Error("not a harness object");
 	const isEnd = (e: unknown) => !!e && typeof (e as End).c === "string" && typeof (e as End).pin === "number";
 	const components = (h.components ?? []).map(c => {
-		if (typeof c?.id !== "string" || !["connector", "splice", "harness"].includes(c.kind)) throw new Error(`component ${c?.id ?? "?"} needs an id and a kind`);
+		if (typeof c?.id !== "string" || !["connector", "splice", "harness", "cable"].includes(c.kind)) throw new Error(`component ${c?.id ?? "?"} needs an id and a kind`);
 		return {
 			...c, name: c.name ?? c.id, x: c.x ?? 0, y: c.y ?? 0,
-			pins: c.kind === "splice" ? 1 : c.kind === "harness" ? (c.ports ?? []).length : Math.max(1, c.pins || 1),
+			pins: c.kind === "splice" ? 1 : c.kind === "harness" ? (c.ports ?? []).length : c.kind === "cable" ? (c.cores ?? []).length : Math.max(1, c.pins || 1),
 		};
 	});
 	const wires = (h.wires ?? []).map(w => {
@@ -150,9 +164,9 @@ export interface BomRow { part: Part; qty: number; unit: string; total: number; 
 /** Bill of materials: pieces for components, metres for wires. */
 export function bom(h: Harness): BomRow[] {
 	return h.parts.map(part => {
-		const comps = h.components.filter(c => c.partId === part.id).length;
-		const mm = h.wires.filter(w => w.partId === part.id).reduce((s, w) => s + (w.length || 0), 0);
-		const onWires = h.wires.some(w => w.partId === part.id);
+		const comps = h.components.filter(c => c.partId === part.id && c.kind !== "cable").length + (h.groups ?? []).filter(g => g.partId === part.id).length;
+		const mm = [...h.wires, ...h.components.filter(c => c.kind === "cable")].filter(w => w.partId === part.id).reduce((s, w) => s + (w.length || 0), 0);
+		const onWires = h.wires.some(w => w.partId === part.id) || h.components.some(c => c.kind === "cable" && c.partId === part.id);
 		const isWire = mm > 0 || (comps === 0 && onWires);
 		const qty = isWire ? mm / 1000 : comps;
 		return { part, qty, unit: isWire ? "m" : "pcs", total: qty * (part.price || 0), used: comps > 0 || onWires };
@@ -162,11 +176,12 @@ export function bom(h: Harness): BomRow[] {
 export function removeComponent(h: Harness, id: string) {
 	h.components = h.components.filter(c => c.id !== id);
 	h.wires = h.wires.filter(w => w.from.c !== id && w.to.c !== id);
+	if (h.groups) h.groups = h.groups.filter(g => (g.members = g.members.filter(m => m !== id)).length);
 }
 
 export function removePart(h: Harness, id: string) {
 	h.parts = h.parts.filter(p => p.id !== id);
-	for (const x of [...h.components, ...h.wires]) if (x.partId === id) delete x.partId;
+	for (const x of [...h.components, ...h.wires, ...h.groups ?? []]) if (x.partId === id) delete x.partId;
 }
 
 // --- Sub-harnesses ---

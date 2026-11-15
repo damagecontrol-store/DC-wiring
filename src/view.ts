@@ -1,7 +1,9 @@
 import { FuzzySuggestModal, Notice, TextFileView, TFile, type App, type WorkspaceLeaf } from "obsidian";
 import { bom, emptyHarness, formatPins, nextId, parseHarness, parsePins, relinkSub, removeComponent, removePart, signalOf, subBom, syncPorts, type BomRow, type Component, type End, type Harness } from "./model.ts";
 import { Schematic, type Host, type Selection } from "./schematic.ts";
-import { FormModal, freePath, type Field } from "./ui.ts";
+import { FormModal, freePath, Picker, type Field } from "./ui.ts";
+import { coreName, formatCores, parseCores, setCores, twist, twistedWith } from "./cable.ts";
+import { addToGroup, isLocked, splitGroup, wireLocked } from "./groups.ts";
 
 export const VIEW_TYPE = "dc-wiring-harness";
 type Tab = "schematic" | "connections" | "parts";
@@ -100,6 +102,64 @@ export class HarnessView extends TextFileView implements Host {
 		}).open();
 	}
 
+	editGroup(id: string) {
+		const g = this.h.groups?.find(g => g.id === id);
+		if (!g) return;
+		new FormModal(this.app, `Edit group ${g.id}`, [
+			{ key: "name", label: "Name (e.g. the device: ECU, fuse box)", value: g.name },
+			{ ...this.partField(g.partId), label: "Part (the device, counted once in the BOM)" },
+			{ key: "locked", label: "Locked (contents can't be edited or moved)", value: g.locked ? "yes" : "", options: { "": "No", yes: "Yes" } },
+		], v => {
+			g.name = v.name.trim() || g.name;
+			g.partId = v.partId || undefined;
+			if (v.locked) g.locked = true; else delete g.locked;
+			this.changed();
+		}).open();
+	}
+
+	pickGroup(c: Component) {
+		const items = [{ id: "", name: "＋ New group" }, ...this.h.groups ?? []];
+		new Picker(this.app, `Add ${c.id} to group`, items, g => g.name, g => {
+			const grp = addToGroup(this.h, c.id, g.id);
+			this.changed();
+			if (!g.id) this.editGroup(grp.id);
+		}).open();
+	}
+
+	async saveGroupAsSub(id: string) {
+		const me = this.file, g = this.h.groups?.find(g => g.id === id);
+		if (!me || !g) return;
+		const path = freePath(this.app, me.parent?.path ?? "", `${me.basename} - ${g.name.replace(/[\\/:*?"<>|#^[\]]/g, "-")}`);
+		const h = structuredClone(this.h); // the file is created first: a failed create must not lose the group
+		let sub: Harness;
+		try { sub = splitGroup(h, id, path); } catch (e) { return void new Notice(`DC Wiring: ${(e as Error).message}`); }
+		await this.app.vault.create(path, JSON.stringify(sub, null, "\t"));
+		this.h = h;
+		this.sel = null;
+		this.changed();
+		await this.loadLinks();
+	}
+
+	twistWith(wireId: string) {
+		const others = this.h.wires.filter(w => w.id !== wireId && !twistedWith(this.h, wireId).includes(w.id));
+		new Picker(this.app, `Twist ${wireId} with`, others, w => `${w.id} ${w.name ?? ""} ${w.color}`, w => { twist(this.h, [wireId, w.id]); this.changed(); }).open();
+	}
+
+	addImage(x: number, y: number) {
+		const files = this.app.vault.getFiles().filter(f => ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "avif"].includes(f.extension.toLowerCase()));
+		new Picker(this.app, "Choose an image from the vault", files, f => f.path, f => {
+			const images = this.h.images ?? [];
+			images.push({ id: nextId(this.h, "I", images), path: f.path, x, y, w: 240, h: 160 });
+			this.h.images = images;
+			this.changed();
+		}).open();
+	}
+
+	imageSrc(path: string) {
+		const f = this.app.vault.getAbstractFileByPath(path);
+		return f instanceof TFile ? this.app.vault.getResourcePath(f) : undefined;
+	}
+
 	clear() { this.h = emptyHarness(); this.sel = null; }
 
 	// A harness opened in a background tab has no size yet: fit once it is shown.
@@ -162,7 +222,18 @@ export class HarnessView extends TextFileView implements Host {
 			fields.push({ key: "pins", label: "Pins (count like 8, or rows x columns like 2x4)", value: formatPins(c) });
 			fields.push({ key: "exposed", label: "Show in main harness (when this file is used as a sub-harness)", value: c.exposed ? "yes" : "", options: { "": "No", yes: "Yes" } });
 		}
+		if (c.kind === "cable") fields.push(
+			{ key: "cores", label: "Cores: colour and gauge, comma separated (e.g. rd 0.5, bk 0.5)", value: formatCores(c.cores) },
+			{ key: "shield", label: "Shield", value: c.shield ? "yes" : "", options: { "": "No", yes: "Yes" } },
+			{ key: "length", label: "Length (mm)", value: String(c.length || "") },
+		);
 		new FormModal(this.app, `Edit ${c.id}`, [...fields, this.partField(c.partId)], v => {
+			if (v.cores !== undefined) {
+				const cores = parseCores(v.cores);
+				if (cores.length) setCores(this.h, c, cores, !!v.shield);
+				else new Notice("DC Wiring: a cable needs at least one core.");
+				c.length = Math.max(0, Number(v.length) || 0);
+			}
 			c.name = v.name.trim() || c.name;
 			if (v.pins !== undefined) {
 				const p = parsePins(v.pins);
@@ -188,7 +259,11 @@ export class HarnessView extends TextFileView implements Host {
 			{ key: "gauge", label: "Gauge (mm² or AWG)", value: w.gauge },
 			{ key: "length", label: "Length (mm)", value: String(w.length || "") },
 			this.partField(w.partId),
+			{ key: "identLabel", label: "Ident label (printed on the wire)", value: w.ident?.label ?? "" },
+			{ key: "identColors", label: "Ident colour bands, comma separated (e.g. rd, gn)", value: (w.ident?.colors ?? []).join(", ") },
 		], v => {
+			const label = v.identLabel.trim(), colors = v.identColors.split(",").map(s => s.trim()).filter(Boolean);
+			if (label || colors.length) w.ident = { ...label ? { label } : {}, ...colors.length ? { colors } : {} }; else delete w.ident;
 			if (v.name.trim()) w.name = v.name.trim(); else delete w.name;
 			w.color = v.color.trim() || w.color;
 			w.gauge = v.gauge.trim();
@@ -224,6 +299,8 @@ export class HarnessView extends TextFileView implements Host {
 
 	private deleteSelection() {
 		if (!this.sel) return;
+		const locked = (this.sel.component && isLocked(this.h, this.sel.component)) || this.h.wires.some(w => this.sel!.wires?.includes(w.id) && wireLocked(this.h, w));
+		if (locked) return void new Notice("DC Wiring: unlock the group first.");
 		if (this.sel.component) removeComponent(this.h, this.sel.component);
 		if (this.sel.wires) this.h.wires = this.h.wires.filter(w => !this.sel!.wires!.includes(w.id));
 		this.sel = null;
@@ -255,6 +332,7 @@ export class HarnessView extends TextFileView implements Host {
 		if (this.tab === "schematic") {
 			actions.createEl("button", { text: "+ Connector" }).onclick = () => this.schematic.add("connector");
 			actions.createEl("button", { text: "+ Splice" }).onclick = () => this.schematic.add("splice");
+			actions.createEl("button", { text: "+ Cable" }).onclick = () => this.schematic.addCable();
 			actions.createEl("button", { text: "+ Sub-harness" }).onclick = () => { const p = this.schematic.center(); this.addSub(p.x, p.y); };
 			actions.createEl("button", { text: this.sel?.wires ? "Auto route selected" : "Auto route" }).onclick = () => this.autoRoute();
 			actions.createEl("button", { text: "Fit" }).onclick = () => this.schematic.fit();
@@ -281,11 +359,12 @@ export class HarnessView extends TextFileView implements Host {
 		const end = (e: End) => {
 			const c = this.h.components.find(c => c.id === e.c);
 			if (c?.kind === "harness") return `${c.name} › ${c.ports?.[e.pin - 1] ?? e.pin}`;
+			if (c?.kind === "cable") return `${coreName(c, e.pin)} ${c.name}`;
 			return `${e.c} ${c?.name ?? ""} : ${e.pin}`;
 		};
 		const table = this.body.createEl("table", { cls: "dcw-table" });
 		const head = table.createEl("tr");
-		for (const t of ["ID", "Name", "From", "To", "Signal", "Colour", "Gauge", "Length (mm)", "Part", ""]) head.createEl("th", { text: t });
+		for (const t of ["ID", "Name", "From", "To", "Signal", "Colour", "Gauge", "Length (mm)", "Part", "Twisted with", ""]) head.createEl("th", { text: t });
 		for (const w of this.h.wires) {
 			const tr = table.createEl("tr", { cls: this.sel?.wires?.includes(w.id) ? "is-selected" : "" });
 			tr.onclick = e => { if (!(e.target as HTMLElement).closest("input, select")) this.select({ wires: [w.id] }); };
@@ -304,6 +383,7 @@ export class HarnessView extends TextFileView implements Host {
 				};
 			}
 			this.partSelect(tr.createEl("td"), w.partId, id => { w.partId = id; this.changed(); });
+			tr.createEl("td", { text: twistedWith(this.h, w.id).join(", ") });
 			const del = tr.createEl("td").createEl("button", { text: "✕", attr: { "aria-label": `Delete ${w.id}` } });
 			del.onclick = e => {
 				e.stopPropagation();
@@ -311,6 +391,18 @@ export class HarnessView extends TextFileView implements Host {
 				if (this.sel?.wires?.includes(w.id)) this.sel = null;
 				this.changed();
 			};
+		}
+		// each cable core is a conductor too: its ends are the wires landing on it
+		for (const c of this.h.components) {
+			if (c.kind !== "cable") continue;
+			table.createEl("tr", { cls: "dcw-section" }).createEl("td", { text: `Cable ${c.id} ${c.name}`, attr: { colspan: 11 } });
+			for (const pin of [...(c.cores ?? []).keys()].map(i => i + 1).concat(c.shield ? [0] : [])) {
+				const ends = this.h.wires.flatMap(w => w.from.c === c.id && w.from.pin === pin ? [w.to] : w.to.c === c.id && w.to.pin === pin ? [w.from] : []);
+				const core = c.cores?.[pin - 1];
+				const tr = table.createEl("tr", { cls: "dcw-readonly" });
+				for (const t of [coreName(c, pin), "", ends[0] ? end(ends[0]) : "", ends.slice(1).map(end).join(", "),
+					signalOf(this.h, { c: c.id, pin }) ?? "", core?.color ?? "shield", core?.gauge ?? "", String(c.length || ""), this.h.parts.find(p => p.id === c.partId)?.number ?? "", "", ""]) tr.createEl("td", { text: t });
+			}
 		}
 		if (!this.h.wires.length) this.body.createDiv({ cls: "dcw-empty", text: "No wires yet. Drag from one pin to another on the Schematic." });
 	}
