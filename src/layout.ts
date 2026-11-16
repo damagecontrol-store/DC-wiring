@@ -32,6 +32,15 @@ type Drag =
 	| { mode: "bundle"; from: string; line: SVGLineElement }
 	| { mode: "bend"; b: Bundle; i: number; moved: boolean };
 
+/** A box in the background colour behind a label, so a bundle line running under it doesn't show through. */
+function backed(t: SVGTextElement) {
+	const b = t.getBBox(); // zero when the view is hidden: then no box, which is harmless
+	if (!b.width) return;
+	const r = document.createElementNS(NS, "rect");
+	for (const [k, v] of Object.entries({ x: b.x - 3, y: b.y - 1, width: b.width + 6, height: b.height + 2, rx: 3, class: "dcw-label-bg" })) r.setAttribute(k, String(v));
+	t.before(r);
+}
+
 function el<K extends keyof SVGElementTagNameMap>(parent: Element, tag: K, attrs: Record<string, string | number>, text?: string) {
 	const e = document.createElementNS(NS, tag);
 	for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, String(v));
@@ -108,6 +117,7 @@ export class Layout {
 		const picked = h.wires.filter(w => sel?.wires?.includes(w.id) || (sel?.component && (w.from.c === sel.component || w.to.c === sel.component)));
 		const lit = new Set(picked.flatMap(w => routes.get(w.id)?.bundles ?? []));
 
+		const labels: (() => void)[] = []; // drawn after every bundle line, so a later bundle never crosses a label
 		for (const b of h.bundles ?? []) {
 			const pts = this.points(b);
 			if (!pts) continue;
@@ -121,10 +131,14 @@ export class Layout {
 			el(g, "path", { d, class: "dcw-bline" });
 			el(g, "path", { d, class: "dcw-hit" });
 			const lp = labelPoint(pts);
-			el(g, "text", { x: lp.x, y: lp.y - 8, class: "dcw-blen", "data-blen": b.id },
-				`${b.label ? b.label + " · " : ""}${formatLength(b.length)} · ${n} wire${n === 1 ? "" : "s"}`);
-			if (b.coverings?.length) el(g, "text", { x: lp.x, y: lp.y + 18, class: "dcw-blen" }, this.coverText(b));
+			labels.push(() => {
+				const lg = el(this.g, "g", { "data-bundle": b.id }); // still opens the bundle's menu and editor
+				backed(el(lg, "text", { x: lp.x, y: lp.y - 8, class: "dcw-blen", "data-blen": b.id },
+					`${b.label ? b.label + " · " : ""}${formatLength(b.length)} · ${n} wire${n === 1 ? "" : "s"}`));
+				if (b.coverings?.length) backed(el(lg, "text", { x: lp.x, y: lp.y + 18, class: "dcw-blen" }, this.coverText(b)));
+			});
 		}
+		for (const draw of labels) draw();
 
 		for (const c of this.comps()) {
 			const p = nodePos(h, c.id)!;

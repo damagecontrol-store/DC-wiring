@@ -95,10 +95,10 @@
 .dcw-bundle.is-empty .dcw-bline { stroke-dasharray: 10 6; stroke-width: 3; }
 .dcw-bundle.is-lit .dcw-bline { stroke: var(--text-accent); }
 .dcw-bundle.is-selected .dcw-bline { stroke: var(--interactive-accent); stroke-width: 8; }
-.dcw-blen { fill: var(--text-muted); font-size: 11px; text-anchor: middle; cursor: text; }
+.dcw-blen { fill: var(--text-muted); font-size: 11px; text-anchor: middle; cursor: text; paint-order: stroke; stroke: var(--background-primary); stroke-width: 4px; stroke-linejoin: round; }
 .dcw-comp.is-selected .dcw-splice { stroke-width: 2; }
 .dcw-smark rect { fill: var(--background-secondary); stroke: var(--text-muted); }
-.dcw-smark text { fill: var(--text-muted); font-size: 10px; }
+.dcw-smark text { fill: var(--text-muted); font-size: 10px; paint-order: stroke; stroke: var(--background-primary); stroke-width: 3px; stroke-linejoin: round; }
 .dcw-smark.is-lit rect { fill: var(--interactive-accent); stroke: var(--interactive-accent); }
 .dcw-smark { pointer-events: none; }
 /* parts */
@@ -148,3 +148,4 @@
 .dcw-table tr.is-picked td { background: var(--background-modifier-hover); }
 .dcw-part-image { display: block; max-width: 100%; max-height: 220px; margin: 4px auto 12px; border-radius: var(--radius-s); }
 .dcw-table td.dcw-nowrap { white-space: nowrap; }
+.dcw-label-bg { fill: var(--background-primary); opacity: 0.85; }

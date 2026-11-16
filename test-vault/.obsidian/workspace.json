@@ -11,10 +11,12 @@
             "id": "11bed00bfe2c2e9b",
             "type": "leaf",
             "state": {
-              "type": "empty",
-              "state": {},
-              "icon": "lucide-file",
-              "title": "New tab"
+              "type": "dc-wiring-harness",
+              "state": {
+                "file": "Example/Headlight harness.DC"
+              },
+              "icon": "cable",
+              "title": "Headlight harness"
             }
           }
         ]
@@ -187,6 +189,8 @@
   },
   "active": "11bed00bfe2c2e9b",
   "lastOpenFiles": [
+    "Example/Headlight harness.DC",
+    "Example",
     "QA/QA rich.DC",
     "QA/QA big.DC",
     "QA/QA rich Report 2.html",
@@ -196,8 +200,6 @@
     "Demo harness.DC",
     "QA",
     "Parts library.DClib",
-    "Harness.DC",
-    "Harness Schematic.svg",
-    "Engine harness.DC"
+    "Harness Schematic.svg"
   ]
 }

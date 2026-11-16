@@ -2,6 +2,8 @@
 
 Design automotive wire harnesses inside Obsidian. Draw the schematic, lay out the bundles, and get the wiring list and bill of materials from the same file. The harness lives in your vault next to your notes, datasheets and photos.
 
+![The Schematic view of a headlight harness, with the HEAD net highlighted](docs/images/schematic.jpg)
+
 Each harness is a `.DC` file. It opens with four tabs:
 
 - **Schematic**: connectors, splices, terminals, cables, diodes, resistors and notes.
@@ -14,6 +16,12 @@ Each harness is a `.DC` file. It opens with four tabs:
   - Add coverings such as corrugated tube, tape or heat shrink.
 - **Connections**: the wiring list. From, to, colour, gauge, length and part for every wire.
 - **Parts**: the bill of materials. Counted from what you assigned, priced, and grouped by part type.
+
+| Layout | Parts |
+|---|---|
+| ![Layout view: bundles with lengths, a branch point and coverings](docs/images/layout.jpg) | ![Parts view: the bill of materials grouped by part type](docs/images/parts.jpg) |
+| **Connections** | **Assign part** |
+| ![Connections view: the wiring list](docs/images/connections.jpg) | ![Assigning a part: parts that fit are listed first](docs/images/assign-part.jpg) |
 
 ## Features
 
@@ -76,7 +84,9 @@ npm test        # unit tests (Node 23.6 or later runs the TypeScript directly)
 npm run build   # type check and build main.js for a release
 ```
 
-Open `test-vault` as a vault in Obsidian to try changes.
+Open `test-vault` as a vault in Obsidian to try changes. `test-vault/Example/Headlight harness.DC` is the harness in the screenshots.
+
+The demo video is a [HyperFrames](https://github.com/heygen-com/hyperframes) project in `docs/demo-video`: run `npm run render` there to make the MP4.
 
 ## License
 
