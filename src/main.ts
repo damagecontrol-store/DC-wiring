@@ -7,7 +7,7 @@ import { HarnessView, VIEW_TYPE } from "./view.ts";
 export default class DCWiringPlugin extends Plugin {
 	async onload() {
 		this.registerView(VIEW_TYPE, leaf => new HarnessView(leaf));
-		this.registerExtensions(["dc", "harnesslib"], VIEW_TYPE);
+		this.registerExtensions(["dc", "dclib"], VIEW_TYPE);
 		this.addRibbonIcon("cable", "New harness", () => this.create());
 		this.addCommand({ id: "new-harness", name: "New harness", callback: () => this.create() });
 		for (const x of EXPORTS) this.addCommand({ id: x.id, name: x.name, checkCallback: check => {
@@ -26,7 +26,7 @@ export default class DCWiringPlugin extends Plugin {
 				void leaf.openFile(file).then(() => (leaf.view as HarnessView).showTab("layout"));
 			},
 		});
-		this.addCommand({ id: "new-part-library", name: "New part library", callback: () => this.create(undefined, "harnesslib") });
+		this.addCommand({ id: "new-part-library", name: "New part library", callback: () => this.create(undefined, "DClib") });
 		// only in a harness, not in a library: a library has nothing to add from or to
 		const inHarness = (run: (v: HarnessView) => void) => (checking: boolean) => {
 			const v = this.app.workspace.getActiveViewOfType(HarnessView);
@@ -58,7 +58,7 @@ export default class DCWiringPlugin extends Plugin {
 
 	private async create(folder?: TFolder, ext = "DC") {
 		const dir = folder ?? this.app.fileManager.getNewFileParent(this.app.workspace.getActiveFile()?.path ?? "");
-		const file = await this.app.vault.create(freePath(this.app, dir.path, ext === "harnesslib" ? "Parts library" : "Harness", ext), JSON.stringify(emptyHarness(), null, "\t"));
+		const file = await this.app.vault.create(freePath(this.app, dir.path, ext === "DClib" ? "Parts library" : "Harness", ext), JSON.stringify(emptyHarness(), null, "\t"));
 		await this.app.workspace.getLeaf(true).openFile(file);
 	}
 }

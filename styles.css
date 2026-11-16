@@ -32,7 +32,8 @@
 .dcw-stripe { stroke-width: 1.6; stroke-dasharray: 6 6; }
 .dcw-glow { stroke: var(--interactive-accent); stroke-width: 9; opacity: 0.4; }
 .dcw-hit { stroke: transparent; stroke-width: 12; }
-.dcw-wlabel { fill: var(--text-muted); font-size: 10px; text-anchor: middle; pointer-events: none; }
+.dcw-wlabel { fill: var(--text-muted); font-size: 10px; text-anchor: middle; pointer-events: none; paint-order: stroke; stroke: var(--background-primary); stroke-width: 3px; stroke-linejoin: round; }
+.dcw-wlabel.is-dim { opacity: 0.15; }
 .dcw-temp { stroke: var(--interactive-accent); stroke-width: 2; stroke-dasharray: 4 4; pointer-events: none; }
 
 /* tables */
@@ -146,3 +147,4 @@
 .dcw-table td.dcw-specs { color: var(--text-muted); white-space: nowrap; }
 .dcw-table tr.is-picked td { background: var(--background-modifier-hover); }
 .dcw-part-image { display: block; max-width: 100%; max-height: 220px; margin: 4px auto 12px; border-radius: var(--radius-s); }
+.dcw-table td.dcw-nowrap { white-space: nowrap; }

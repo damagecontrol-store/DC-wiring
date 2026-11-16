@@ -3,7 +3,7 @@ import { exportMenu } from "./output.ts";
 import { routeWires } from "./bundles.ts";
 import { Layout, type LayoutSel } from "./layout.ts";
 import { formatLength, parseLength } from "./length.ts";
-import { bom, emptyHarness, isHarnessExt, formatPins, nextId, parseHarness, parsePins, relinkSub, removeComponent, removePart, setContact, signalOf, subBom, syncPorts, type BomRow, type BranchPoint, type Bundle, type Component, type End, type Harness, type Part } from "./model.ts";
+import { bom, emptyHarness, isHarnessExt, isLibExt, formatPins, nextId, parseHarness, parsePins, relinkSub, removeComponent, removePart, setContact, signalOf, subBom, syncPorts, type BomRow, type BranchPoint, type Bundle, type Component, type End, type Harness, type Part } from "./model.ts";
 import { NOTE_COLORS, Schematic, type Host, type Selection } from "./schematic.ts";
 import { FormModal, freePath, Picker, type Field } from "./ui.ts";
 import { coreName, formatCores, parseCores, partCores, setCores, twist, twistedWith, wiresLost } from "./cable.ts";
@@ -92,7 +92,7 @@ export class HarnessView extends TextFileView implements Host {
 			if (p?.components.some(c => c.kind === "harness" && c.file === me)) parents.push(f);
 		}
 		const libs = new Map<string, Harness>();
-		for (const f of vault.getFiles()) if (f.extension === "harnesslib" && f.path !== me) {
+		for (const f of vault.getFiles()) if (isLibExt(f.extension) && f.path !== me) {
 			const lib = await read(f.path);
 			if (lib) libs.set(f.path, lib);
 		}
@@ -146,8 +146,11 @@ export class HarnessView extends TextFileView implements Host {
 
 	pickGroup(c: Component) {
 		const items = [{ id: "", name: "＋ New group" }, ...this.h.groups ?? []];
-		new Picker(this.app, `Add ${c.id} to group`, items, g => g.name, g => {
-			const grp = addToGroup(this.h, c.id, g.id);
+		// a selected component brings the rest of the selection along; locked groups keep their members
+		const ids = selComps(this.sel).includes(c.id) ? selComps(this.sel).filter(id => !isLocked(this.h, id)) : [c.id];
+		new Picker(this.app, `Add ${ids.length > 1 ? ids.length + " components" : c.id} to group`, items, g => g.name, g => {
+			const grp = addToGroup(this.h, ids[0], g.id);
+			for (const id of ids.slice(1)) addToGroup(this.h, id, grp.id);
 			this.changed();
 			if (!g.id) this.editGroup(grp.id);
 		}).open();
@@ -203,7 +206,7 @@ export class HarnessView extends TextFileView implements Host {
 		this.bar = this.contentEl.createDiv("dcw-bar");
 		this.body = this.contentEl.createDiv("dcw-body-wrap");
 		// a linked harness changed: refresh sub-harness blocks, BOM roll-up and the "Part of" links
-		const onVault = (f: unknown) => { if (f instanceof TFile && (isHarnessExt(f.extension) || f.extension === "harnesslib") && f !== this.file) void this.loadLinks(); };
+		const onVault = (f: unknown) => { if (f instanceof TFile && (isHarnessExt(f.extension) || isLibExt(f.extension)) && f !== this.file) void this.loadLinks(); };
 		this.registerEvent(this.app.vault.on("modify", onVault));
 		this.registerEvent(this.app.vault.on("delete", onVault));
 		this.registerEvent(this.app.vault.on("rename", (f, oldPath) => {
@@ -438,7 +441,7 @@ export class HarnessView extends TextFileView implements Host {
 		new Picker(this.app, `Assign a part to ${what}`, opts, o => o.text, o => o.run()).open();
 	}
 
-	get isLib() { return this.file?.extension === "harnesslib"; }
+	get isLib() { return !!this.file && isLibExt(this.file.extension); }
 
 	private editUnits() {
 		new FormModal(this.app, "Units", [
@@ -465,9 +468,9 @@ export class HarnessView extends TextFileView implements Host {
 
 	/** Adds or updates every numbered part of this harness in a library the user picks (or a new one). */
 	addAllToLibrary() {
-		const files = this.app.vault.getFiles().filter(f => f.extension === "harnesslib" && f !== this.file);
+		const files = this.app.vault.getFiles().filter(f => isLibExt(f.extension) && f !== this.file);
 		new LibraryPicker(this.app, files, async f => {
-			const path = f?.path ?? (await this.app.vault.create(freePath(this.app, this.file?.parent?.path ?? "", "Parts library", "harnesslib"), JSON.stringify(emptyHarness(), null, "\t"))).path;
+			const path = f?.path ?? (await this.app.vault.create(freePath(this.app, this.file?.parent?.path ?? "", "Parts library", "DClib"), JSON.stringify(emptyHarness(), null, "\t"))).path;
 			const parts = this.h.parts.filter(p => p.number);
 			await this.writeLib(path, lib => { for (const p of parts) copyPart(p, this.h, lib); });
 			new Notice(`DC Wiring: ${parts.length} parts added to ${path}${parts.length < this.h.parts.length ? "; parts without a part number were skipped" : ""}.`);
@@ -727,14 +730,14 @@ export class HarnessView extends TextFileView implements Host {
 			{ key: "price", title: "Unit price", sort: true, cell: edit("price"), sub: r => cur(r.part.price) },
 		];
 		if (!lib) all.push(
-			{ key: "qty", title: "Qty", sort: true, cell: (td, r) => td.setText(!r.used ? "Not used" : qty(r) + (r.excluded ? " (excluded)" : "")), sub: qty },
+			{ key: "qty", title: "Qty", sort: true, cell: (td, r) => { td.addClass("dcw-nowrap"); td.setText(!r.used ? "Not used" : qty(r) + (r.excluded ? " (excluded)" : "")); }, sub: qty },
 			{ key: "total", title: "Total", sort: true, cell: (td, r) => td.setText(cur(r.total)), sub: r => cur(r.total) },
 		);
 		if (libs.length) all.push({ key: "libs", title: "Libraries", cell: (td, r) => {
 			const p = r.part;
 			td.addClass("dcw-libs");
 			for (const [path, l] of libs) {
-				const st = syncStatus(p, h, l), name = path.split("/").pop()!.replace(/\.harnesslib$/, "");
+				const st = syncStatus(p, h, l), name = path.split("/").pop()!.replace(/\.dclib$/i, "");
 				const push = () => this.writeLib(path, x => { copyPart(p, h, x); });
 				if (st === "missing") td.createEl("button", { text: `+ ${name}`, attr: { "aria-label": `Add to ${path}` } }).onclick = push;
 				else if (st === "in-sync") td.createSpan({ text: `✓ ${name}`, attr: { "aria-label": `In sync with ${path}` } });

@@ -3,7 +3,11 @@ import { cpSync, mkdirSync } from "node:fs";
 
 const outdir = "test-vault/.obsidian/plugins/dc-wiring";
 mkdirSync(outdir, { recursive: true });
-const copy = { name: "copy", setup(b) { b.onEnd(() => { for (const f of ["manifest.json", "styles.css"]) cpSync(f, `${outdir}/${f}`); }); } };
+// the test vault gets a working copy; main.js in the project root is the file a release ships
+const copy = { name: "copy", setup(b) { b.onEnd(() => {
+  for (const f of ["manifest.json", "styles.css"]) cpSync(f, `${outdir}/${f}`);
+  cpSync(`${outdir}/main.js`, "main.js");
+}); } };
 
 const ctx = await esbuild.context({
   entryPoints: ["src/main.ts"],

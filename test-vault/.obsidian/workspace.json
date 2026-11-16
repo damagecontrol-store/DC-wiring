@@ -11,12 +11,10 @@
             "id": "11bed00bfe2c2e9b",
             "type": "leaf",
             "state": {
-              "type": "dc-wiring-harness",
-              "state": {
-                "file": "Demo harness.DC"
-              },
-              "icon": "cable",
-              "title": "Demo harness"
+              "type": "empty",
+              "state": {},
+              "icon": "lucide-file",
+              "title": "New tab"
             }
           }
         ]
@@ -189,14 +187,17 @@
   },
   "active": "11bed00bfe2c2e9b",
   "lastOpenFiles": [
+    "QA/QA rich.DC",
+    "QA/QA big.DC",
+    "QA/QA rich Report 2.html",
+    "QA/QA rich Report.html",
+    "QA/Parts library.DClib",
+    "QA/QA rich - Inline pair.DC",
+    "Demo harness.DC",
+    "QA",
+    "Parts library.DClib",
     "Harness.DC",
     "Harness Schematic.svg",
-    "Engine harness.DC",
-    "Demo harness.DC",
-    "Harness 2.DC",
-    "Harness.harness",
-    "Harness BOM.csv",
-    "Demo harness.harness",
-    "Engine harness.harness"
+    "Engine harness.DC"
   ]
 }

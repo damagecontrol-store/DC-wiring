@@ -115,7 +115,7 @@ test("wire label prefers the name, can hide ids, and the setting survives parsin
 test("audit 3: ids are never reused after a delete", () => {
 	const h = sample(); // C1, S1, C2
 	assert.equal(nextId(h, "C", h.components), "C3");
-	h.components = h.components.filter(c => c.id !== "C2");
+	removeComponent(h, "C2");
 	assert.equal(nextId(h, "C", h.components), "C4"); // not C2 or C3 again
 	assert.equal(parseHarness(JSON.stringify(h)).seq?.C, 4); // survives save + load
 });
@@ -179,4 +179,13 @@ test("audit2 3: files with missing ends are rejected, missing display fields get
 	assert.throws(() => parseHarness("null"));
 	const h = parseHarness('{"components":[{"id":"C1","kind":"connector"}],"wires":[{"id":"W1","from":{"c":"C1","pin":1},"to":{"c":"C1","pin":1}}],"parts":[{"id":"P1"}]}');
 	assert.deepEqual([h.wires[0].color, h.wires[0].length, h.components[0].name, h.components[0].x, h.parts[0].price], ["", 0, "C1", 0, 0]);
+});
+
+test("a wire ending on a missing component or pin makes the file read-only", () => {
+	const file = (to: object, extra = {}) => JSON.stringify({ version: 1, components: [{ id: "C1", kind: "connector", pins: 2 }, { id: "CB1", kind: "cable", cores: [{ color: "rd", gauge: "" }], ...extra }],
+		wires: [{ id: "W1", from: { c: "C1", pin: 1 }, to }] });
+	assert.throws(() => parseHarness(file({ c: "C9", pin: 1 })), /C9, which does not exist/);
+	assert.throws(() => parseHarness(file({ c: "C1", pin: 3 })), /C1 pin 3/);
+	assert.throws(() => parseHarness(file({ c: "CB1", pin: 0 })), /CB1 pin 0/); // no shield
+	assert.equal(parseHarness(file({ c: "CB1", pin: 0 }, { shield: true })).wires.length, 1);
 });

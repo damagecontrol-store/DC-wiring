@@ -236,6 +236,7 @@ export function setGaugeUnit(h: Harness, unit: GaugeUnit) {
 	if (unit === old) return;
 	const pin = (s?: string) => s && /^\d+(?:[.,]\d+)?$/.test(s.trim()) ? `${s.trim()} ${old}` : s;
 	for (const w of h.wires) w.gauge = pin(w.gauge) ?? "";
+	for (const k of [...h.components.flatMap(c => c.cores ?? []), ...h.parts.flatMap(p => p.coreList ?? [])]) k.gauge = pin(k.gauge) ?? "";
 	for (const p of h.parts) for (const k of ["gauge", "gaugeMin", "gaugeMax"] as const) if (p[k]) p[k] = pin(p[k]);
 	if (unit === "mm²") delete h.gaugeUnit; else h.gaugeUnit = unit;
 }

@@ -2,6 +2,7 @@ import { Menu, Notice } from "obsidian";
 import { cavName, compLabel, duplicate, labelOf, matches, mateError, moveConnections, netSignals, PREFIX, resolveTarget, selComps } from "./components.ts";
 import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, wireLabel, type Component, type End, type Harness, type Wire } from "./model.ts";
 import { routeWires } from "./bundles.ts";
+import { formatLength } from "./length.ts";
 import { effectiveWire, loadedParts } from "./parts.ts";
 import { insertIndex, labelPoint, orthoPoints, roundedPath, routeAround, separate, STUB, type P, type Rect } from "./route.ts";
 import { wireColors } from "./ui.ts";
@@ -276,7 +277,8 @@ export class Schematic {
 			grp.forEach((r, i) => r.offset = (right(r).y >= left(r).y ? -1 : 1) * (i - (grp.length - 1) / 2) * 6);
 		}
 
-		const labels: { x: number; y: number }[] = []; // wire labels drawn so far, so side-by-side wires don't print on top of each other
+		// wire labels: placed apart so side-by-side wires don't print on top of each other, drawn after every wire so none crosses them
+		const labels: { x: number; y: number; text: string; dim: boolean }[] = [];
 		for (const { w, a, b, offset } of routed) {
 			const pts = orthoPoints(a, b, w.points, offset);
 			const d = roundedPath(pts);
@@ -294,13 +296,13 @@ export class Schematic {
 			if (label) {
 				let y = lp.y - 5;
 				while (labels.some(q => Math.abs(q.x - lp.x) < 40 && Math.abs(q.y - y) < 11)) y += 12;
-				labels.push({ x: lp.x, y });
-				el(g, "text", { x: lp.x, y, class: "dcw-wlabel" }, label);
+				labels.push({ x: lp.x, y, text: label, dim: !!lit && !lit.has(w.id) });
 			}
 			// shortcut: ident and twist marks sit level at the label point, also on vertical runs; follow the path if that reads badly
 			if (w.ident) this.ident(g, lp, w.ident);
 			if (w.twist) for (const s of [-1, 1]) el(g, "path", { d: `M${lp.x - 12},${lp.y + 12} q3,${s * 5} 6,0 t6,0 t6,0 t6,0`, class: "dcw-twist" });
 		}
+		for (const l of labels) el(this.g, "text", { x: l.x, y: l.y, class: "dcw-wlabel" + (l.dim ? " is-dim" : "") }, l.text);
 
 		for (const c of h.components) {
 			const g = el(this.g, "g", { class: "dcw-comp", "data-comp": c.id });
@@ -421,7 +423,7 @@ export class Schematic {
 		if (twoPin(c)) return { x1: c.x - 4, y1: c.y - 20, x2: c.x + DW + 4, y2: c.y + 36 };
 		if (c.kind === "note") { const s = this.noteSize(c); return { x1: c.x, y1: c.y, x2: c.x + s.w, y2: c.y + s.h }; }
 		const hasPart = this.host.h.parts.some(p => p.id === c.partId);
-		let x1 = c.x, x2 = c.x + W, y2 = c.y + HDR + c.pins * ROW + (hasPart ? 18 : 0);
+		let x1 = c.x, x2 = c.x + W, y2 = c.y + HDR + c.pins * ROW + (hasPart || (c.kind === "cable" && c.length) ? 18 : 0);
 		if (c.kind === "cable" && c.shield) y2 += ROW;
 		if (c.kind === "harness" && !c.pins) y2 += 20; // "No connectors shown" hint
 		if (c.layout) {
@@ -783,7 +785,6 @@ export class Schematic {
 		const rows = c.pins + (c.shield ? 1 : 0), hgt = HDR + rows * ROW;
 		el(g, "rect", { x: c.x, y: c.y, width: W, height: hgt, rx: 12, class: "dcw-body dcw-cable" });
 		el(g, "text", { x: c.x + 10, y: c.y + 16, class: "dcw-label" }, `${c.id}  ${c.name}`);
-		if (c.length) el(g, "text", { x: c.x + W - 10, y: c.y + 16, class: "dcw-pinno is-end" }, `${c.length} mm`);
 		for (let r = 0; r < rows; r++) {
 			const pin = r < c.pins ? r + 1 : 0, y = c.y + HDR + r * ROW, core = c.cores?.[pin - 1];
 			el(g, "line", { x1: c.x, y1: y, x2: c.x + W, y2: y, class: "dcw-sep" });
@@ -798,7 +799,9 @@ export class Schematic {
 			}
 			for (const x of [c.x, c.x + W]) el(g, "circle", { cx: x, cy: y + ROW / 2, r: 4, class: "dcw-pin", "data-pin": pin, "data-comp": c.id });
 		}
-		if (part) el(g, "text", { x: c.x, y: c.y + hgt + 14, class: "dcw-part" }, part);
+		// length under the box with the part: in the title row a long name ran into it
+		const below = [part, c.length ? formatLength(c.length, this.host.h.lengthUnit) : ""].filter(Boolean).join(" · ");
+		if (below) el(g, "text", { x: c.x, y: c.y + hgt + 14, class: "dcw-part" }, below);
 	}
 
 	/** Wire ident: colour bands, then the label, centred on the wire. */
@@ -853,7 +856,8 @@ export class Schematic {
 		if (c) {
 			const grp = groupOf(h, c.id);
 			if (grp?.locked) return !!m.addItem(i => i.setTitle(`Locked in ${grp.name}`).setIcon("lock").setDisabled(true));
-			m.addItem(i => i.setTitle("Add to group…").setIcon("group").onClick(() => this.host.pickGroup(c)));
+			const n = selComps(this.host.sel).includes(c.id) ? selComps(this.host.sel).length : 1;
+			m.addItem(i => i.setTitle(n > 1 ? `Add ${n} components to group…` : "Add to group…").setIcon("group").onClick(() => this.host.pickGroup(c)));
 			if (grp) m.addItem(i => i.setTitle(`Remove from ${grp.name}`).setIcon("ungroup").onClick(() => { grp.members = grp.members.filter(x => x !== c.id); if (!grp.members.length) ungroup(h, grp.id); done(); }));
 			return false;
 		}

@@ -2,6 +2,8 @@
 
 /** A harness file: "name.DC" (Obsidian lowercases extensions). */
 export const isHarnessExt = (ext: string) => ext === "dc";
+/** Part library files: "Parts.DClib". Obsidian lowercases extensions. */
+export const isLibExt = (ext: string) => ext === "dclib";
 import { routeWires, wireLength } from "./bundles.ts";
 
 import { loadedParts, effectiveWire } from "./parts.ts";
@@ -167,6 +169,14 @@ export function parseHarness(text: string): Harness {
 		if (typeof p?.id !== "string") throw new Error("every part needs an id");
 		return { ...p, number: p.number ?? "", manufacturer: p.manufacturer ?? "", description: p.description ?? "", price: p.price ?? 0 };
 	});
+	// a wire end on a missing component or pin can't be drawn or routed
+	const byId = new Map(components.map(c => [c.id, c]));
+	for (const w of wires) for (const e of [w.from, w.to]) {
+		const c = byId.get(e.c);
+		if (!c) throw new Error(`wire ${w.id} ends on ${e.c}, which does not exist`);
+		const ok = Number.isInteger(e.pin) && (e.pin === 0 ? c.kind === "cable" && !!c.shield : e.pin >= 1 && e.pin <= c.pins);
+		if (!ok) throw new Error(`wire ${w.id} ends on ${e.c} pin ${e.pin}, which does not exist`);
+	}
 	for (const b of h.bundles ?? []) if (typeof b?.id !== "string" || typeof b.from !== "string" || typeof b.to !== "string") throw new Error(`bundle ${b?.id ?? "?"} needs an id, "from" and "to"`);
 	for (const c of Array.isArray(h.components) ? h.components : []) if (c?.contacts !== undefined && !(c.contacts && typeof c.contacts === "object" && Object.values(c.contacts).every(v => typeof v === "string"))) throw new Error(`${c.id}: "contacts" must map pins to part ids`);
 	for (const x of [...h.bundles ?? [], ...h.branchPoints ?? []]) if (x.coverings !== undefined && !(Array.isArray(x.coverings) && x.coverings.every(c => typeof c === "string"))) throw new Error(`${x.id}: "coverings" must be a list of part ids`);

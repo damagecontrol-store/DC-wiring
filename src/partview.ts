@@ -127,7 +127,7 @@ export class PartModal extends Modal {
 	}
 }
 
-/** Pick a .harnesslib file, or null for a new library. */
+/** Pick a .DClib file, or null for a new library. */
 export class LibraryPicker extends FuzzySuggestModal<TFile | null> {
 	constructor(app: App, private files: TFile[], private pick: (f: TFile | null) => void) {
 		super(app);

@@ -1,5 +1,5 @@
 // Export menu and commands: writes CSV, SVG and HTML files next to the harness in the vault.
-import { Menu, Notice, Platform } from "obsidian";
+import { arrayBufferToBase64, Menu, Notice, Platform, TFile } from "obsidian";
 import { bomTable, connectionsTable, csv, cutList, reportHtml, wiringTables } from "./export.ts";
 import { Schematic } from "./schematic.ts";
 import { FormModal, freePath } from "./ui.ts";
@@ -15,10 +15,18 @@ async function save(v: HarnessView, suffix: string, ext: string, text: string) {
 }
 
 // presentation properties the canvas sets through CSS classes and Obsidian variables
-const PROPS = ["fill", "stroke", "stroke-width", "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "opacity", "font-size", "font-family", "font-weight", "font-style", "text-anchor"];
+const PROPS = ["fill", "stroke", "stroke-width", "stroke-dasharray", "stroke-linecap", "stroke-linejoin", "opacity", "font-size", "font-family", "font-weight", "font-style", "text-anchor", "paint-order"];
 
-/** The schematic as a standalone SVG, in light theme colours, without selection or grid. */
-function schematicSvg(v: HarnessView): string {
+const MIME: Record<string, string> = { svg: "image/svg+xml", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp" };
+
+/** The schematic as a standalone SVG, in light theme colours, without selection or grid. Canvas images are embedded. */
+async function schematicSvg(v: HarnessView): Promise<string> {
+	// read first: the theme swap below must stay synchronous. Obsidian's own image urls don't work outside the app
+	const embedded = new Map<string, string>();
+	for (const i of v.h.images ?? []) {
+		const f = v.app.vault.getAbstractFileByPath(i.path);
+		if (f instanceof TFile) embedded.set(i.id, `data:${MIME[f.extension.toLowerCase()] ?? "application/octet-stream"};base64,${arrayBufferToBase64(await v.app.vault.readBinary(f))}`);
+	}
 	const s = new Schematic(v), sel = v.sel, body = document.body, dark = body.hasClass("theme-dark");
 	v.sel = null;
 	s.svg.setAttribute("style", "position:fixed;left:-10000px;top:0;width:100px;height:100px"); // laid out, so styles compute
@@ -29,6 +37,10 @@ function schematicSvg(v: HarnessView): string {
 		s.render();
 		const g = s.svg.querySelector(":scope > g") as SVGGElement;
 		g.querySelector("[data-bg]")?.remove();
+		for (const img of Array.from(g.querySelectorAll("[data-img] image"))) {
+			const src = embedded.get(img.parentElement!.getAttribute("data-img")!);
+			if (src) img.setAttribute("href", src); else img.remove();
+		}
 		for (const e of Array.from(g.querySelectorAll("*"))) {
 			const cs = getComputedStyle(e);
 			e.setAttribute("style", PROPS.map(p => `${p}:${cs.getPropertyValue(p)}`).join(";"));
@@ -46,16 +58,17 @@ function schematicSvg(v: HarnessView): string {
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
-const report = (v: HarnessView) => reportHtml(v.h, { title: v.file?.basename, date: today(), ...v.h.export }, schematicSvg(v), v.subParts());
+const report = async (v: HarnessView) => reportHtml(v.h, { title: v.file?.basename, date: today(), ...v.h.export }, await schematicSvg(v), v.subParts());
 
 /** Prints the report with the system dialog, which offers "Save as PDF". */
-function print(v: HarnessView) {
+async function print(v: HarnessView) {
+	const html = await report(v);
 	const f = document.body.createEl("iframe", { attr: { style: "position:fixed;width:0;height:0;border:0" } });
 	f.onload = () => {
 		f.contentWindow!.addEventListener("afterprint", () => f.remove());
 		f.contentWindow!.print();
 	};
-	f.srcdoc = report(v);
+	f.srcdoc = html;
 }
 
 function editTitleBlock(v: HarnessView) {
@@ -79,8 +92,8 @@ export const EXPORTS: { id: string; name: string; run: (v: HarnessView) => unkno
 	{ id: "export-connections", name: "Export connections (CSV)", run: v => save(v, "Connections", "csv", csv(connectionsTable(v.h))) },
 	{ id: "export-wiring-tables", name: "Export wiring tables per connector (CSV)", run: v => save(v, "Wiring tables", "csv", csv(wiringTables(v.h))) },
 	{ id: "export-cut-list", name: "Export cut list (CSV)", run: v => save(v, "Cut list", "csv", csv(cutList(v.h))) },
-	{ id: "export-schematic-svg", name: "Export schematic (SVG)", run: v => save(v, "Schematic", "svg", schematicSvg(v)) },
-	{ id: "export-report", name: "Export report (HTML)", run: v => save(v, "Report", "html", report(v)) },
+	{ id: "export-schematic-svg", name: "Export schematic (SVG)", run: async v => save(v, "Schematic", "svg", await schematicSvg(v)) },
+	{ id: "export-report", name: "Export report (HTML)", run: async v => save(v, "Report", "html", await report(v)) },
 	{ id: "print-report", name: "Print report / save as PDF", run: print, desktop: true },
 	{ id: "edit-title-block", name: "Edit title block and notes", run: editTitleBlock },
 ];

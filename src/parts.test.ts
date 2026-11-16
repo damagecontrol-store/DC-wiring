@@ -103,8 +103,12 @@ test("validation finds gauge, cavity, part and duplicate problems", () => {
 
 test("changing the gauge unit keeps typed gauges the same size", () => {
 	const h = withConfig();
+	h.components.push({ id: "CB1", kind: "cable", name: "CB1", x: 0, y: 0, pins: 2, cores: [{ color: "rd", gauge: "0.35" }, { color: "bk", gauge: "" }] });
+	h.parts.push({ id: "CAB", number: "CAB", manufacturer: "", description: "", price: 0, type: "cable", coreList: [{ color: "rd", gauge: "0.5" }] });
 	setGaugeUnit(h, "AWG");
 	assert.equal(h.gaugeUnit, "AWG");
+	assert.deepEqual(h.components[2].cores!.map(k => k.gauge), ["0.35 mm²", ""]);
+	assert.equal(h.parts.find(p => p.id === "CAB")!.coreList![0].gauge, "0.5 mm²");
 	assert.equal(h.wires[1].gauge, "2.5 mm²");
 	assert.equal(h.parts.find(p => p.id === "SMALL")!.gaugeMax, "0.75 mm²");
 	assert.equal(h.parts.find(p => p.id === "SMALL")!.gaugeMin, "22 AWG");
@@ -172,7 +176,7 @@ test("a contact set on a cavity replaces the configuration's, \"\" removes it, a
 	assert.deepEqual(c1.contacts, { 2: "SMALL" });
 	removePart(h, "SMALL");
 	assert.equal(c1.contacts, undefined);
-	assert.throws(() => parseHarness(JSON.stringify({ ...h, components: [{ ...c1, contacts: { 1: 5 } }] })), /contacts/);
+	assert.throws(() => parseHarness(JSON.stringify({ ...h, components: [{ ...c1, contacts: { 1: 5 } }, h.components[1]] })), /contacts/);
 });
 
 test("parts table helpers: spec summary, parts used by a selection, excluded components", () => {

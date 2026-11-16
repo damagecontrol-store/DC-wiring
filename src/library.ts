@@ -1,4 +1,4 @@
-// Part libraries: a .harnesslib file is a harness file holding only parts. Parts match by part number.
+// Part libraries: a .DClib file is a harness file holding only parts. Parts match by part number.
 // Pure: no Obsidian imports, so tests can load it.
 
 import { nextId, type Harness, type Part } from "./model.ts";

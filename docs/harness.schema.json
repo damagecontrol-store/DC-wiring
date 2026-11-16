@@ -1,18 +1,29 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
-	"title": "DC Wiring harness file (.DC)",
-	"description": "A wire harness for the DC Wiring Obsidian plugin. Editing guide: harness-format.md. Unknown fields are kept when the plugin saves.",
+	"title": "DC Wiring harness file (.DC) and part library (.DClib), version 1",
+	"description": "A wire harness for the DC Wiring Obsidian plugin. Guide: harness-format.md. Unknown fields are kept when the plugin saves.",
 	"type": "object",
 	"required": ["version"],
 	"properties": {
 		"$schema": { "type": "string" },
-		"$docs": { "type": "string" },
 		"version": { "const": 1 },
 		"components": { "type": "array", "items": { "$ref": "#/$defs/component" } },
 		"wires": { "type": "array", "items": { "$ref": "#/$defs/wire" } },
 		"parts": { "type": "array", "items": { "$ref": "#/$defs/part" } },
+		"bundles": { "type": "array", "items": { "$ref": "#/$defs/bundle" } },
+		"branchPoints": { "type": "array", "items": { "$ref": "#/$defs/branchPoint" } },
+		"groups": { "type": "array", "items": { "$ref": "#/$defs/group" } },
+		"images": { "type": "array", "items": { "$ref": "#/$defs/image" } },
+		"mates": {
+			"type": "array",
+			"description": "Connectors plugged together: pin n of a is joined to pin n of b.",
+			"items": { "type": "object", "required": ["a", "b"], "properties": { "a": { "type": "string" }, "b": { "type": "string" } } }
+		},
+		"currency": { "type": "string", "description": "Symbol shown with prices." },
+		"lengthUnit": { "enum": ["mm", "cm", "m", "in", "ft", "yd"], "description": "Unit lengths are shown in; stored values stay in mm." },
+		"gaugeUnit": { "enum": ["mm²", "AWG", "cmil", "kcmil"], "description": "Unit of gauges typed as a plain number. mm² when unset." },
 		"hideWireIds": { "type": "boolean", "description": "Canvas: don't label unnamed wires with their id." },
-		"seq": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "Last id number handed out per prefix (C, S, H, W, P). Ids are never reused." },
+		"seq": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "Last id number handed out per prefix. Ids are never reused." },
 		"export": {
 			"type": "object",
 			"description": "Title block and notes of exported drawings and reports.",
@@ -27,59 +38,82 @@
 		}
 	},
 	"$defs": {
+		"point": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } },
 		"end": {
 			"type": "object",
 			"required": ["c", "pin"],
 			"properties": {
 				"c": { "type": "string", "description": "Component id." },
-				"pin": { "type": "integer", "minimum": 1, "description": "1-based pin. A splice has only pin 1." }
+				"pin": { "type": "integer", "minimum": 0, "description": "1-based pin; 0 is a shielded cable's shield." }
 			}
+		},
+		"core": {
+			"type": "object",
+			"required": ["color"],
+			"properties": { "color": { "type": "string", "description": "e.g. rd or bk/wh" }, "gauge": { "type": "string" } }
 		},
 		"component": {
 			"type": "object",
 			"required": ["id", "kind"],
 			"properties": {
-				"id": { "type": "string", "description": "C1 (connector), S1 (splice), H1 (sub-harness block). Unique." },
-				"kind": { "enum": ["connector", "splice", "harness"] },
+				"id": { "type": "string" },
+				"kind": { "enum": ["connector", "splice", "terminal", "diode", "resistor", "cable", "harness", "note"] },
 				"name": { "type": "string" },
 				"x": { "type": "number" },
 				"y": { "type": "number" },
-				"pins": { "type": "integer", "minimum": 1, "maximum": 200, "description": "Connector pin count. Splice: 1. Sub-harness block: equals ports.length." },
-				"layout": {
-					"type": "object",
-					"required": ["rows", "cols"],
-					"properties": { "rows": { "type": "integer", "minimum": 1 }, "cols": { "type": "integer", "minimum": 1 } },
-					"description": "Pin grid, numbered row by row. rows * cols must equal pins."
-				},
-				"signals": { "type": "object", "propertyNames": { "pattern": "^[0-9]+$" }, "additionalProperties": { "type": "string" }, "description": "Pin number -> signal label." },
-				"partId": { "type": "string", "description": "Id of an entry in parts." },
-				"exposed": { "type": "boolean", "description": "Connector: its pins show on the block when this file is used as a sub-harness." },
+				"pins": { "type": "integer", "minimum": 0, "description": "Fixed by kind except for connectors; cables: number of cores; sub-harness blocks: number of ports." },
+				"layout": { "type": "object", "required": ["rows", "cols"], "properties": { "rows": { "type": "integer", "minimum": 1 }, "cols": { "type": "integer", "minimum": 1 } } },
+				"signals": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Pin number (as text) to signal name." },
+				"globals": { "type": "array", "items": { "type": "integer" } },
+				"nc": { "type": "array", "items": { "type": "integer" }, "description": "Pins marked not connected." },
+				"cavities": { "type": "array", "items": { "type": "string" }, "description": "Cavity name per pin." },
+				"partId": { "type": "string" },
+				"config": { "type": "string", "description": "Part configuration in use; the first when unset." },
+				"contacts": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Pin to contact or cavity-plug part id; \"\" for none." },
+				"excludeFromBom": { "type": "boolean" },
+				"exposed": { "type": "boolean", "description": "Connector: pins offered to a parent harness." },
 				"file": { "type": "string", "description": "Sub-harness block: vault path of the .DC file." },
-				"ports": { "type": "array", "items": { "type": "string", "pattern": "^[^:]+:[0-9]+$" }, "description": "Sub-harness block: \"C4:1\" per pin, in pin order. Only append." },
-				"wiringTable": {
-					"type": "object",
-					"required": ["dx", "dy"],
-					"properties": { "dx": { "type": "number" }, "dy": { "type": "number" } },
-					"description": "Schematic: wiring table shown at this offset from the component."
-				}
+				"ports": { "type": "array", "items": { "type": "string" }, "description": "Sub-harness block: \"C4:1\" per pin. Maintained by the plugin." },
+				"cores": { "type": "array", "items": { "$ref": "#/$defs/core" } },
+				"shield": { "type": "boolean" },
+				"length": { "type": "number", "description": "Cable length in mm." },
+				"terminal": { "enum": ["ferrule", "ring", "spade", "male QC", "female QC", "loose end"] },
+				"flipped": { "type": "boolean", "description": "Diode: cathode on the left." },
+				"text": { "type": "string", "description": "Note text." },
+				"color": { "type": "string", "description": "Note colour." },
+				"pos": { "$ref": "#/$defs/point", "description": "Centre on the Layout view." },
+				"wiringTable": { "type": "object", "properties": { "dx": { "type": "number" }, "dy": { "type": "number" } } }
 			}
 		},
 		"wire": {
 			"type": "object",
 			"required": ["id", "from", "to"],
 			"properties": {
-				"id": { "type": "string", "description": "W1, W2, ... Unique." },
+				"id": { "type": "string" },
 				"name": { "type": "string" },
 				"from": { "$ref": "#/$defs/end" },
 				"to": { "$ref": "#/$defs/end" },
-				"color": { "type": "string", "description": "\"red\", or base/stripe like \"red/white\" or \"rd/ws\"." },
-				"gauge": { "type": "string", "description": "mm² like \"0.5\", or \"20AWG\"." },
-				"length": { "type": "number", "minimum": 0, "description": "Millimetres." },
+				"color": { "type": "string", "description": "Colour, stripe after a slash: rd/ws." },
+				"gauge": { "type": "string", "description": "e.g. 0.5 or 20AWG; a plain number is in gaugeUnit." },
+				"length": { "type": "number", "description": "mm; bundle routing wins when the wire runs through bundles." },
 				"partId": { "type": "string" },
-				"points": {
+				"points": { "type": "array", "items": { "$ref": "#/$defs/point" } },
+				"twist": { "type": "string", "description": "Twist group id (TW1)." },
+				"ident": { "type": "object", "properties": { "label": { "type": "string" }, "colors": { "type": "array", "items": { "type": "string" } } } }
+			}
+		},
+		"configuration": {
+			"type": "object",
+			"required": ["name", "items"],
+			"properties": {
+				"name": { "type": "string" },
+				"items": {
 					"type": "array",
-					"items": { "type": "object", "required": ["x", "y"], "properties": { "x": { "type": "number" }, "y": { "type": "number" } } },
-					"description": "Schematic bend points, from -> to."
+					"items": {
+						"type": "object",
+						"required": ["partId"],
+						"properties": { "partId": { "type": "string" }, "apply": { "enum": ["connected", "unconnected", "never"] } }
+					}
 				}
 			}
 		},
@@ -87,11 +121,84 @@
 			"type": "object",
 			"required": ["id"],
 			"properties": {
-				"id": { "type": "string", "description": "P1, P2, ... Unique." },
+				"id": { "type": "string" },
 				"number": { "type": "string" },
 				"manufacturer": { "type": "string" },
 				"description": { "type": "string" },
-				"price": { "type": "number", "description": "Per piece, or per metre when used on wires." }
+				"price": { "type": "number", "description": "Per piece, or per metre for wires, cables and cut-to-length coverings." },
+				"type": { "enum": ["connector", "wire", "cable", "terminal", "splice", "diode", "resistor", "covering", "contact", "cavity-plug", "cavity-seal", "lock", "dust-cover", "boot", "backshell", "mount", "group", "other"] },
+				"internalNumber": { "type": "string" },
+				"url": { "type": "string" },
+				"colour": { "type": "string" },
+				"image": { "type": "string", "description": "Vault path of a picture." },
+				"excludeFromBom": { "type": "boolean" },
+				"cavities": { "type": "integer", "minimum": 1 },
+				"designations": { "type": "array", "items": { "type": "string" } },
+				"gender": { "type": "string" },
+				"shell": { "type": "boolean" },
+				"gauge": { "type": "string" },
+				"stripe": { "type": "string" },
+				"insulation": { "type": "number" },
+				"diameter": { "type": "number" },
+				"cores": { "type": "integer", "minimum": 1 },
+				"coreList": { "type": "array", "items": { "$ref": "#/$defs/core" } },
+				"shield": { "type": "boolean" },
+				"terminalType": { "enum": ["ring", "spade", "quick-connect", "ferrule", "other"] },
+				"size": { "type": "string" },
+				"contactType": { "enum": ["crimp", "solder", "other"] },
+				"gaugeMin": { "type": "string" },
+				"gaugeMax": { "type": "string" },
+				"coveringType": { "enum": ["heatshrink", "tape", "corrugated tubing", "spiral wrap", "tubing", "braided sleeve"] },
+				"cutToLength": { "type": "boolean" },
+				"length": { "type": "number", "description": "Fixed-length covering, mm." },
+				"value": { "type": "string" },
+				"configurations": { "type": "array", "items": { "$ref": "#/$defs/configuration" } }
+			}
+		},
+		"bundle": {
+			"type": "object",
+			"required": ["id", "from", "to"],
+			"properties": {
+				"id": { "type": "string" },
+				"from": { "type": "string", "description": "Component or branch point id." },
+				"to": { "type": "string" },
+				"length": { "type": "number", "description": "mm" },
+				"points": { "type": "array", "items": { "$ref": "#/$defs/point" } },
+				"label": { "type": "string" },
+				"coverings": { "type": "array", "items": { "type": "string" }, "description": "Covering part ids." }
+			}
+		},
+		"branchPoint": {
+			"type": "object",
+			"required": ["id", "x", "y"],
+			"properties": {
+				"id": { "type": "string" },
+				"x": { "type": "number" },
+				"y": { "type": "number" },
+				"coverings": { "type": "array", "items": { "type": "string" }, "description": "Covering or boot part ids." }
+			}
+		},
+		"group": {
+			"type": "object",
+			"required": ["id", "name", "members"],
+			"properties": {
+				"id": { "type": "string" },
+				"name": { "type": "string" },
+				"members": { "type": "array", "items": { "type": "string" } },
+				"partId": { "type": "string" },
+				"locked": { "type": "boolean" }
+			}
+		},
+		"image": {
+			"type": "object",
+			"required": ["id", "path", "x", "y", "w", "h"],
+			"properties": {
+				"id": { "type": "string" },
+				"path": { "type": "string" },
+				"x": { "type": "number" },
+				"y": { "type": "number" },
+				"w": { "type": "number" },
+				"h": { "type": "number" }
 			}
 		}
 	}

@@ -91,7 +91,7 @@ Our sub-harness "exposed pins" covers part of this; real mates (bulkhead/inline 
 | Exclude from BOM | ❌ | |
 | Part images | ❌ | Vault images |
 | BOM sections by type, quantity per unit (pcs / m) | 🟡 | pcs/m only |
-| **Part libraries** reused across harnesses, sync status, push/pull | ❌ | `.harnesslib` file in the vault |
+| **Part libraries** reused across harnesses, sync status, push/pull | ❌ | `.DClib` file in the vault |
 | Parts catalog (hosted manufacturer DB) | ⏭️ | No data source; maybe import later |
 | Duplicate part number warning | ❌ | |
 
