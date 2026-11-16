@@ -2,6 +2,10 @@
 
 Design automotive wire harnesses inside Obsidian. Draw the schematic, lay out the bundles, and get the wiring list and bill of materials from the same file. The harness lives in your vault next to your notes, datasheets and photos.
 
+[![Watch the 33-second demo video](docs/images/demo-video.jpg)](https://github.com/damagecontrol-store/DC-wiring/releases/download/1.0.0/dc-wiring-demo.mp4)
+
+▶ **[Watch the demo video](https://github.com/damagecontrol-store/DC-wiring/releases/download/1.0.0/dc-wiring-demo.mp4)** (33 seconds, MP4)
+
 ![The Schematic view of a headlight harness, with the HEAD net highlighted](docs/images/schematic.jpg)
 
 Each harness is a `.DC` file. It opens with four tabs:
@@ -84,7 +88,7 @@ npm test        # unit tests (Node 23.6 or later runs the TypeScript directly)
 npm run build   # type check and build main.js for a release
 ```
 
-Open `test-vault` as a vault in Obsidian to try changes. `test-vault/Example/Headlight harness.DC` is the harness in the screenshots.
+`test-vault` is a local vault and is not in the repository. Open it in Obsidian (any folder works) and turn on DC Wiring under *Community plugins* to try your changes.
 
 The demo video is a [HyperFrames](https://github.com/heygen-com/hyperframes) project in `docs/demo-video`: run `npm run render` there to make the MP4.
 

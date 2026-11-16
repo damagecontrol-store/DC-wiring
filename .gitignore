@@ -1,5 +1,5 @@
 node_modules/
-test-vault/.obsidian/plugins/dc-wiring/main.js
 .claude/
-test-vault/.obsidian/plugins/dc-wiring/
 main.js
+# local dev vault; npm run dev builds into it
+test-vault/
