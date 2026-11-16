@@ -1,6 +1,6 @@
 {
 	"$schema": "https://json-schema.org/draft/2020-12/schema",
-	"title": "DC Wiring .harness file",
+	"title": "DC Wiring harness file (.DC)",
 	"description": "A wire harness for the DC Wiring Obsidian plugin. Editing guide: harness-format.md. Unknown fields are kept when the plugin saves.",
 	"type": "object",
 	"required": ["version"],
@@ -54,7 +54,7 @@
 				"signals": { "type": "object", "propertyNames": { "pattern": "^[0-9]+$" }, "additionalProperties": { "type": "string" }, "description": "Pin number -> signal label." },
 				"partId": { "type": "string", "description": "Id of an entry in parts." },
 				"exposed": { "type": "boolean", "description": "Connector: its pins show on the block when this file is used as a sub-harness." },
-				"file": { "type": "string", "description": "Sub-harness block: vault path of the .harness file." },
+				"file": { "type": "string", "description": "Sub-harness block: vault path of the .DC file." },
 				"ports": { "type": "array", "items": { "type": "string", "pattern": "^[^:]+:[0-9]+$" }, "description": "Sub-harness block: \"C4:1\" per pin, in pin order. Only append." },
 				"wiringTable": {
 					"type": "object",

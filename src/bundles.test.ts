@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { removeBranchPoint, routeWires, spliceSpots, splitBundle, wireLength } from "./bundles.ts";
-import { bom, parseHarness, removeComponent, type Harness } from "./model.ts";
+import { bom, parseHarness, removeComponent, removePart, type Harness } from "./model.ts";
 
 // C1 --B1 100-- BP1 --B2 200-- C2,  BP1 --B3 50-- C3
 const make = (): Harness => parseHarness(JSON.stringify({
@@ -31,7 +31,7 @@ test("wires take the shortest bundle path; unrouted wires keep their typed lengt
 	const h = make(), r = routeWires(h);
 	assert.deepEqual(r.get("W1"), { bundles: ["B1", "B2"], length: 300 });
 	assert.equal(r.has("W2"), false);
-	assert.equal(wireLength(h, h.wires[1]), 40);
+	assert.equal(wireLength(h, h.wires[1], routeWires(h)), 40);
 	assert.equal(bom(h)[0].qty, (300 + 40) / 1000);
 	h.bundles!.push({ id: "B4", from: "C1", to: "C2", length: 250 });
 	assert.deepEqual(routeWires(h).get("W1"), { bundles: ["B4"], length: 250 });
@@ -80,4 +80,26 @@ test("deleting a component drops its bundles", () => {
 	const h = make();
 	removeComponent(h, "C3");
 	assert.deepEqual(h.bundles!.map(b => b.id), ["B1", "B2"]);
+});
+
+test("coverings: cut-to-length counts bundle length, fixed ones a piece; split copies, merge joins, delete cleans up", () => {
+	const h = make();
+	h.parts.push(
+		{ id: "P2", number: "Corrugated 10", manufacturer: "", description: "", price: 2, type: "covering", cutToLength: true },
+		{ id: "P3", number: "Boot", manufacturer: "", description: "", price: 1, type: "boot" },
+	);
+	h.bundles![0].coverings = ["P2"];
+	h.bundles![1].coverings = ["P2"];
+	h.branchPoints![0].coverings = ["P3"];
+	const row = (id: string) => bom(h).find(r => r.part.id === id)!;
+	assert.deepEqual([row("P2").qty, row("P2").unit, row("P2").total], [0.3, "m", 0.6]);
+	assert.deepEqual([row("P3").qty, row("P3").unit, row("P3").used], [1, "pcs", true]);
+	const bp = splitBundle(h, "B2", { x: 200, y: 0 })!;
+	assert.deepEqual(h.bundles!.filter(b => b.coverings).length, 3); // both halves of B2 keep it
+	assert.equal(row("P2").qty, 0.3);
+	removeBranchPoint(h, bp);
+	assert.deepEqual(h.bundles!.find(b => b.id === "B2")!.coverings, ["P2"]);
+	assert.throws(() => parseHarness(JSON.stringify({ ...h, bundles: [{ ...h.bundles![0], coverings: "P2" }] })), /coverings/);
+	removePart(h, "P2");
+	assert.ok(h.bundles!.every(b => !b.coverings));
 });

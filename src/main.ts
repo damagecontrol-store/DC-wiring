@@ -1,5 +1,5 @@
 import { Platform, Plugin, TFile, TFolder } from "obsidian";
-import { emptyHarness, parseHarness, relinkSub } from "./model.ts";
+import { emptyHarness, parseHarness, relinkSub, isHarnessExt } from "./model.ts";
 import { EXPORTS } from "./output.ts";
 import { freePath } from "./ui.ts";
 import { HarnessView, VIEW_TYPE } from "./view.ts";
@@ -7,7 +7,7 @@ import { HarnessView, VIEW_TYPE } from "./view.ts";
 export default class DCWiringPlugin extends Plugin {
 	async onload() {
 		this.registerView(VIEW_TYPE, leaf => new HarnessView(leaf));
-		this.registerExtensions(["harness", "harnesslib"], VIEW_TYPE);
+		this.registerExtensions(["dc", "harnesslib"], VIEW_TYPE);
 		this.addRibbonIcon("cable", "New harness", () => this.create());
 		this.addCommand({ id: "new-harness", name: "New harness", callback: () => this.create() });
 		for (const x of EXPORTS) this.addCommand({ id: x.id, name: x.name, checkCallback: check => {
@@ -36,11 +36,11 @@ export default class DCWiringPlugin extends Plugin {
 		};
 		this.addCommand({ id: "add-parts-to-library", name: "Add all harness parts to a part library", checkCallback: inHarness(v => v.addAllToLibrary()) });
 		this.addCommand({ id: "add-part-from-library", name: "Add a part from a part library", checkCallback: inHarness(v => v.addFromLibrary()) });
-		// keep sub-harness links working when a .harness file is renamed or moved
+		// keep sub-harness links working when a harness file is renamed or moved
 		this.registerEvent(this.app.vault.on("rename", async (file, oldPath) => {
-			if (!(file instanceof TFile) || file.extension !== "harness") return;
+			if (!(file instanceof TFile) || !isHarnessExt(file.extension)) return;
 			for (const f of this.app.vault.getFiles()) {
-				if (f.extension !== "harness" || f === file) continue;
+				if (!isHarnessExt(f.extension) || f === file) continue;
 				if (this.app.workspace.getLeavesOfType(VIEW_TYPE).some(l => (l.view as HarnessView).file === f)) continue; // open views fix themselves
 				if (!(await this.app.vault.cachedRead(f)).includes(JSON.stringify(oldPath))) continue;
 				await this.app.vault.process(f, text => {
@@ -56,9 +56,9 @@ export default class DCWiringPlugin extends Plugin {
 		}));
 	}
 
-	private async create(folder?: TFolder, ext = "harness") {
+	private async create(folder?: TFolder, ext = "DC") {
 		const dir = folder ?? this.app.fileManager.getNewFileParent(this.app.workspace.getActiveFile()?.path ?? "");
-		const file = await this.app.vault.create(freePath(this.app, dir.path, ext === "harness" ? "Harness" : "Parts library", ext), JSON.stringify(emptyHarness(), null, "\t"));
+		const file = await this.app.vault.create(freePath(this.app, dir.path, ext === "harnesslib" ? "Parts library" : "Harness", ext), JSON.stringify(emptyHarness(), null, "\t"));
 		await this.app.workspace.getLeaf(true).openFile(file);
 	}
 }

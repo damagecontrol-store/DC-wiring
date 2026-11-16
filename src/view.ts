@@ -1,15 +1,15 @@
-import { FuzzySuggestModal, Notice, TextFileView, TFile, type App, type WorkspaceLeaf } from "obsidian";
+import { FuzzySuggestModal, Menu, Notice, TextFileView, TFile, type App, type WorkspaceLeaf } from "obsidian";
 import { exportMenu } from "./output.ts";
 import { routeWires } from "./bundles.ts";
 import { Layout, type LayoutSel } from "./layout.ts";
 import { formatLength, parseLength } from "./length.ts";
-import { bom, emptyHarness, formatPins, nextId, parseHarness, parsePins, relinkSub, removeComponent, removePart, signalOf, subBom, syncPorts, type BomRow, type Bundle, type Component, type End, type Harness, type Part } from "./model.ts";
+import { bom, emptyHarness, isHarnessExt, formatPins, nextId, parseHarness, parsePins, relinkSub, removeComponent, removePart, setContact, signalOf, subBom, syncPorts, type BomRow, type BranchPoint, type Bundle, type Component, type End, type Harness, type Part } from "./model.ts";
 import { NOTE_COLORS, Schematic, type Host, type Selection } from "./schematic.ts";
 import { FormModal, freePath, Picker, type Field } from "./ui.ts";
-import { coreName, formatCores, parseCores, setCores, twist, twistedWith } from "./cable.ts";
+import { coreName, formatCores, parseCores, partCores, setCores, twist, twistedWith, wiresLost } from "./cable.ts";
 import { addToGroup, isLocked, splitGroup, wireLocked } from "./groups.ts";
 import { copyPart, syncStatus } from "./library.ts";
-import { effectiveWire, PART_TYPES, setGaugeUnit } from "./parts.ts";
+import { assignPart, effectiveWire, fitsRange, followPart, PART_TYPES, partChoices, partFrom, partSummary, partsUsedBy, pinGauge, setGaugeUnit, type Item } from "./parts.ts";
 import { LibPartPicker, LibraryPicker, PartModal } from "./partview.ts";
 import { GAUGE_UNITS, LENGTH_UNITS, type GaugeUnit, type LengthUnit } from "./units.ts";
 import { validate } from "./validate.ts";
@@ -17,6 +17,8 @@ import { cavName, compLabel, designations, labelOf, parseCavities, pasteSignals,
 
 export const VIEW_TYPE = "dc-wiring-harness";
 type Tab = "schematic" | "layout" | "connections" | "parts";
+
+const COLS_KEY = "dcw-parts-hidden-columns"; // per device, shared by every harness and library
 
 export class HarnessView extends TextFileView implements Host {
 	h: Harness = emptyHarness();
@@ -36,6 +38,7 @@ export class HarnessView extends TextFileView implements Host {
 	libs = new Map<string, Harness>(); // part libraries in the vault, by path
 	private partSort: { key: string; dir: number } = { key: "", dir: 1 };
 	private partFilter = "";
+	private onlySelected = false;
 	private future: string[] = []; // undone states, for redo
 
 	constructor(leaf: WorkspaceLeaf) { super(leaf); }
@@ -84,7 +87,7 @@ export class HarnessView extends TextFileView implements Host {
 		await walk(this.h);
 		const parents: TFile[] = [];
 		for (const f of vault.getFiles()) {
-			if (f.extension !== "harness" || f.path === me) continue;
+			if (!isHarnessExt(f.extension) || f.path === me) continue;
 			const p = await read(f.path);
 			if (p?.components.some(c => c.kind === "harness" && c.file === me)) parents.push(f);
 		}
@@ -200,7 +203,7 @@ export class HarnessView extends TextFileView implements Host {
 		this.bar = this.contentEl.createDiv("dcw-bar");
 		this.body = this.contentEl.createDiv("dcw-body-wrap");
 		// a linked harness changed: refresh sub-harness blocks, BOM roll-up and the "Part of" links
-		const onVault = (f: unknown) => { if (f instanceof TFile && (f.extension === "harness" || f.extension === "harnesslib") && f !== this.file) void this.loadLinks(); };
+		const onVault = (f: unknown) => { if (f instanceof TFile && (isHarnessExt(f.extension) || f.extension === "harnesslib") && f !== this.file) void this.loadLinks(); };
 		this.registerEvent(this.app.vault.on("modify", onVault));
 		this.registerEvent(this.app.vault.on("delete", onVault));
 		this.registerEvent(this.app.vault.on("rename", (f, oldPath) => {
@@ -276,6 +279,7 @@ export class HarnessView extends TextFileView implements Host {
 		this.sel = null;
 		this.requestSave();
 		this.render();
+		for (const v of this.siblings()) { v.h = parseHarness(next); v.sel = v.lsel = null; v.render(); } // or their next edit saves the old state
 	}
 
 	editComponent(c: Component) {
@@ -327,6 +331,8 @@ export class HarnessView extends TextFileView implements Host {
 			if (v.terminal !== undefined) c.terminal = v.terminal;
 			if (v.exposed !== undefined) { if (v.exposed) c.exposed = true; else delete c.exposed; }
 			c.partId = v.partId || undefined;
+			// a newly chosen cable part brings its cores; cancelling keeps the cores typed above
+			if (c.kind === "cable" && c.partId !== before) { const p = this.h.parts.find(p => p.id === c.partId); if (p) this.cablesFollow(p, [c]); }
 			if (v.config && c.partId === before && v.config !== cfs[0].name) c.config = v.config; else delete c.config;
 			this.changed();
 		}).open();
@@ -346,7 +352,91 @@ export class HarnessView extends TextFileView implements Host {
 		}).open();
 	}
 
-	editPart(p: Part) { new PartModal(this.app, this.h, p, () => this.changed()).open(); }
+	/** Parts of the sub-harnesses, rolled up for this harness's BOM (also used by the exports). */
+	subParts(): BomRow[] { return subBom(this.h, p => this.subs.get(p), new Set(this.file ? [this.file.path] : [])); }
+
+	editPart(p: Part) {
+		const mfrs = [...new Set([...this.h.parts, ...[...this.libs.values()].flatMap(l => l.parts)].map(x => x.manufacturer).filter(Boolean))].sort();
+		new PartModal(this.app, this.h, p, () => {
+			this.cablesFollow(p, this.h.components.filter(c => c.kind === "cable" && c.partId === p.id));
+			followPart(this.h, p);
+			this.changed();
+		}, mfrs).open();
+	}
+
+	/** Gives cables their part's cores and shield, asking first when that removes wires. False when the user says no. */
+	private cablesFollow(p: Part, cables: Component[]): boolean {
+		const pc = partCores(p);
+		if (!pc || !cables.length) return true;
+		const lost = cables.flatMap(c => wiresLost(this.h, c, pc.cores, pc.shield));
+		if (lost.length && !window.confirm(`${p.number || p.id} has ${pc.cores.length} core${pc.cores.length > 1 ? "s" : ""}${pc.shield ? " and a shield" : ", no shield"}. `
+			+ `This removes ${lost.length} wire${lost.length > 1 ? "s" : ""} on cores it does not have: ${lost.map(w => w.id).join(", ")}. Continue?`)) return false;
+		for (const c of cables) setCores(this.h, c, pc.cores, pc.shield);
+		return true;
+	}
+
+	/** Picks the contact (or cavity plug) for one cavity, overriding the configuration. Contacts that take the pin's wires come first. */
+	pickContact(c: Component, pin: number) {
+		const h = this.h, g = pinGauge(h, c.id, pin);
+		const rank = (p: Part) => p.type === "contact" ? (fitsRange(h, p, g) ? 2 : 1) : p.type === "cavity-plug" ? 1 : 0;
+		const set = (id: string | undefined) => { setContact(c, pin, id); this.changed(); };
+		const opts: { text: string; run: () => void }[] = [...h.parts].sort((a, b) => rank(b) - rank(a)).map(p => ({
+			text: [p.number || p.id, p.manufacturer, p.description, p.type === "contact" && (p.gaugeMin || p.gaugeMax) && `${p.gaugeMin ?? ""}–${p.gaugeMax ?? ""}`,
+				rank(p) < 2 && `(${p.type === "contact" ? "does not fit the wire" : p.type ?? "generic"})`].filter(Boolean).join("  "),
+			run: () => set(p.id),
+		}));
+		opts.unshift({ text: "＋ Create new contact", run: () => {
+			const p: Part = { id: nextId(h, "P", h.parts), number: "", manufacturer: "", description: "", price: 0, type: "contact" };
+			h.parts.push(p);
+			setContact(c, pin, p.id);
+			this.editPart(p);
+		} });
+		if (c.contacts?.[pin] !== undefined) opts.push({ text: "↺ Use the configuration's contact", run: () => set(undefined) });
+		if (c.contacts?.[pin] !== "") opts.push({ text: "✕ No contact in this cavity", run: () => set("") });
+		new Picker(this.app, `Contact for ${c.id}:${cavName(c, pin)}`, opts, o => o.text, o => o.run()).open();
+	}
+
+	/** Adds a covering to a bundle, or a covering or boot to a branch point. Those part types are listed first. */
+	addCovering(x: Bundle | BranchPoint) {
+		const h = this.h, types: (string | undefined)[] = "from" in x ? ["covering"] : ["covering", "boot"];
+		const add = (id: string) => { x.coverings = [...x.coverings ?? [], id]; };
+		const parts = [...h.parts].sort((a, b) => Number(types.includes(b.type)) - Number(types.includes(a.type)));
+		const opts: { text: string; run: () => void }[] = parts.map(p => ({
+			text: [p.number || p.id, p.coveringType, p.cutToLength && "cut to length", p.manufacturer, p.description, !types.includes(p.type) && `(${p.type ?? "generic"})`].filter(Boolean).join("  "),
+			run: () => { add(p.id); this.changed(); },
+		}));
+		opts.unshift({ text: "＋ Create new covering", run: () => {
+			const p: Part = { id: nextId(h, "P", h.parts), number: "", manufacturer: "", description: "", price: 0, type: "covering", ...("from" in x ? { cutToLength: true } : {}) };
+			h.parts.push(p);
+			add(p.id);
+			this.editPart(p);
+		} });
+		new Picker(this.app, `Add a covering to ${x.id}`, opts, o => o.text, o => o.run()).open();
+	}
+
+	/**
+	 * Assign part: a searchable list with the parts that fit first, each configuration its own entry, plus
+	 * creating a part from the item. Applies to every selected item of the same kind when the item is selected.
+	 */
+	pickPart(x: Item) {
+		const sel = this.sel, h = this.h;
+		const items: Item[] = "kind" in x
+			? (selComps(sel).includes(x.id) ? h.components.filter(c => selComps(sel).includes(c.id) && c.kind === x.kind) : [x])
+			: (sel?.wires?.includes(x.id) ? h.wires.filter(w => sel.wires!.includes(w.id)) : [x]);
+		const what = items.length > 1 ? `${items.length} ${"kind" in x ? "components" : "wires"}` : x.id;
+		const opts: { text: string; run: () => void }[] = partChoices(h, x).map(({ part: p, config, fits }) => ({
+			text: [p.number || p.id, config && `· ${config}`, p.internalNumber && `[${p.internalNumber}]`, p.manufacturer, p.description,
+				!fits && `(${p.type ?? "generic"})`].filter(Boolean).join("  "),
+			run: () => {
+				if (!this.cablesFollow(p, items.filter((i): i is Component => "kind" in i && i.kind === "cable"))) return;
+				assignPart(h, items, p.id, config);
+				this.changed();
+			},
+		}));
+		opts.unshift({ text: "＋ Create new part from this", run: () => { const p = partFrom(h, x); assignPart(h, items, p.id); this.editPart(p); } });
+		if (items.some(i => i.partId)) opts.push({ text: "✕ Unassign part", run: () => { assignPart(h, items); this.changed(); } });
+		new Picker(this.app, `Assign a part to ${what}`, opts, o => o.text, o => o.run()).open();
+	}
 
 	get isLib() { return this.file?.extension === "harnesslib"; }
 
@@ -487,6 +577,8 @@ export class HarnessView extends TextFileView implements Host {
 	}
 
 	private renderBar() {
+		// a clicked button is about to be removed: keep the keyboard in this view, or undo, delete and search stop working
+		if (this.bar.contains(document.activeElement)) this.contentEl.focus({ preventScroll: true });
 		this.bar.empty();
 		const tabs = this.bar.createDiv("dcw-tabs");
 		for (const [t, label] of this.isLib ? [["parts", "Library parts"] as const] : [["schematic", "Schematic"], ["layout", "Layout"], ["connections", "Connections"], ["parts", "Parts"]] as const) {
@@ -593,11 +685,13 @@ export class HarnessView extends TextFileView implements Host {
 	}
 
 	private renderParts() {
-		const cur = (n: number) => `${this.h.currency ?? ""}${n.toFixed(2)}`;
+		const h = this.h, cur = (n: number) => `${h.currency ?? ""}${n.toFixed(2)}`;
 		const qty = (r: BomRow) => `${r.unit === "m" ? r.qty.toFixed(2) : r.qty} ${r.unit}`;
 		const lib = this.isLib, libs = lib ? [] : [...this.libs];
-		const warnings = validate(this.h).filter(w => w.kind === "part" && w.message !== "Not used"); // "Not used" shows in Qty
-		const search = this.body.createEl("input", { type: "search", cls: "dcw-search", placeholder: "Filter parts", value: this.partFilter });
+		const warnings = validate(h).filter(w => w.kind === "part" && w.message !== "Not used"); // "Not used" shows in Qty
+		const hidden = new Set<string>(this.app.loadLocalStorage(COLS_KEY) ?? []);
+		const bar = this.body.createDiv({ cls: "dcw-parts-bar" });
+		const search = bar.createEl("input", { type: "search", cls: "dcw-search", placeholder: "Filter parts", value: this.partFilter });
 		search.oninput = () => {
 			this.partFilter = search.value;
 			this.render();
@@ -605,22 +699,83 @@ export class HarnessView extends TextFileView implements Host {
 			s?.focus();
 			s?.setSelectionRange(s.value.length, s.value.length);
 		};
-		const cols: [string, string][] = [["Part number", "number"], ["Internal", "internalNumber"], ["Manufacturer", "manufacturer"], ["Description", "description"], ["Unit price", "price"]];
-		if (!lib) cols.push(["Qty", "qty"], ["Total", "total"]);
-		if (libs.length) cols.push(["Libraries", ""]);
-		cols.push(["Warnings", ""], ["", ""]);
+		const picked = selComps(this.sel).length || this.sel?.wires?.length ? partsUsedBy(h, { components: selComps(this.sel), wires: this.sel?.wires }) : undefined;
+		if (!lib) {
+			const only = bar.createEl("button", { text: "Only selected", cls: this.onlySelected ? "mod-cta" : "",
+				attr: { "aria-label": "Show only the parts used by the components and wires selected on the Schematic or Layout" } });
+			only.onclick = () => { this.onlySelected = !this.onlySelected; this.render(); };
+		}
+		// cell: draws one cell; sub: text for the read-only sub-harness rows
+		type Col = { key: string; title: string; sort?: boolean; cell: (td: HTMLElement, r: BomRow) => void; sub?: (r: BomRow) => string };
+		const edit = (key: "number" | "internalNumber" | "manufacturer" | "description" | "price") => (td: HTMLElement, r: BomRow) => {
+			const p = r.part, input = td.createEl("input", { value: String(p[key] ?? ""), type: key === "price" ? "number" : "text" });
+			if (key === "number") input.placeholder = "Part number";
+			input.onchange = () => {
+				const v = input.value.trim();
+				if (key === "price") p.price = Number(v) || 0;
+				else if (key === "internalNumber") { if (v) p.internalNumber = v; else delete p.internalNumber; }
+				else p[key] = v;
+				this.changed();
+			};
+		};
+		const all: Col[] = [
+			{ key: "number", title: "Part number", sort: true, cell: edit("number"), sub: r => r.part.number },
+			{ key: "specs", title: "Specs", cell: (td, r) => { td.setText(partSummary(r.part)); td.addClass("dcw-specs"); }, sub: r => partSummary(r.part) },
+			{ key: "internalNumber", title: "Internal", sort: true, cell: edit("internalNumber"), sub: r => r.part.internalNumber ?? "" },
+			{ key: "manufacturer", title: "Manufacturer", sort: true, cell: edit("manufacturer"), sub: r => r.part.manufacturer },
+			{ key: "description", title: "Description", sort: true, cell: edit("description"), sub: r => r.part.description },
+			{ key: "price", title: "Unit price", sort: true, cell: edit("price"), sub: r => cur(r.part.price) },
+		];
+		if (!lib) all.push(
+			{ key: "qty", title: "Qty", sort: true, cell: (td, r) => td.setText(!r.used ? "Not used" : qty(r) + (r.excluded ? " (excluded)" : "")), sub: qty },
+			{ key: "total", title: "Total", sort: true, cell: (td, r) => td.setText(cur(r.total)), sub: r => cur(r.total) },
+		);
+		if (libs.length) all.push({ key: "libs", title: "Libraries", cell: (td, r) => {
+			const p = r.part;
+			td.addClass("dcw-libs");
+			for (const [path, l] of libs) {
+				const st = syncStatus(p, h, l), name = path.split("/").pop()!.replace(/\.harnesslib$/, "");
+				const push = () => this.writeLib(path, x => { copyPart(p, h, x); });
+				if (st === "missing") td.createEl("button", { text: `+ ${name}`, attr: { "aria-label": `Add to ${path}` } }).onclick = push;
+				else if (st === "in-sync") td.createSpan({ text: `✓ ${name}`, attr: { "aria-label": `In sync with ${path}` } });
+				else if (st === "out-of-sync") {
+					td.createSpan({ text: `≠ ${name} `, attr: { "aria-label": `Out of sync with ${path}` } });
+					td.createEl("button", { text: "Push", attr: { "aria-label": `Update the part in ${path} to match this harness` } }).onclick = push;
+					td.createEl("button", { text: "Pull", attr: { "aria-label": `Update this part to match ${path}` } }).onclick = () => {
+						copyPart(l.parts.find(x => x.number === p.number)!, l, h);
+						this.changed();
+					};
+				}
+			}
+		} });
+		all.push({ key: "warnings", title: "Warnings", cell: (td, r) => { td.addClass("dcw-warn"); td.setText(warnings.filter(w => w.id === r.part.id).map(w => w.message).join("; ")); } });
+		const cols = all.filter(c => c.key === "number" || !hidden.has(c.key));
+		const colsBtn = bar.createEl("button", { text: "Columns" });
+		colsBtn.onclick = e => {
+			const m = new Menu();
+			for (const c of all) if (c.key !== "number") m.addItem(i => i.setTitle(c.title).setChecked(!hidden.has(c.key)).onClick(() => {
+				if (hidden.has(c.key)) hidden.delete(c.key); else hidden.add(c.key);
+				this.app.saveLocalStorage(COLS_KEY, [...hidden]);
+				this.render();
+			}));
+			m.showAtMouseEvent(e);
+		};
+
 		const table = this.body.createEl("table", { cls: "dcw-table" });
 		const head = table.createEl("tr");
-		for (const [t, key] of cols) {
-			const sorted = key && this.partSort.key === key;
-			const th = head.createEl("th", { text: t + (sorted ? (this.partSort.dir > 0 ? " ▲" : " ▼") : ""), cls: key ? "dcw-sortable" : "" });
-			if (key) th.onclick = () => { this.partSort = { key, dir: sorted ? -this.partSort.dir : 1 }; this.render(); };
+		for (const c of cols) {
+			const sorted = c.sort && this.partSort.key === c.key;
+			const th = head.createEl("th", { text: c.title + (sorted ? (this.partSort.dir > 0 ? " ▲" : " ▼") : ""), cls: c.sort ? "dcw-sortable" : "" });
+			if (c.sort) th.onclick = () => { this.partSort = { key: c.key, dir: sorted ? -this.partSort.dir : 1 }; this.render(); };
 		}
+		head.createEl("th");
+		const span = cols.length + 1;
 		const f = this.partFilter.trim().toLowerCase();
 		const val = (r: BomRow) => { const k = this.partSort.key; return k === "qty" || k === "total" ? r[k] : (r.part as unknown as Record<string, unknown>)[k] ?? ""; };
-		const rows = bom(this.h);
+		const rows = bom(h);
 		const shown = rows
-			.filter(r => !f || [r.part.number, r.part.internalNumber, r.part.manufacturer, r.part.description, r.part.type].some(s => s?.toLowerCase().includes(f)))
+			.filter(r => !f || [r.part.number, r.part.internalNumber, r.part.manufacturer, r.part.description, r.part.type, partSummary(r.part)].some(s => s?.toLowerCase().includes(f)))
+			.filter(r => lib || !this.onlySelected || !!picked?.has(r.part.id))
 			.sort((a, b) => {
 				if (!this.partSort.key) return 0;
 				const x = val(a), y = val(b);
@@ -630,66 +785,37 @@ export class HarnessView extends TextFileView implements Host {
 			["Generic parts", shown.filter(r => !r.part.type)]];
 		for (const [label, list] of sections) {
 			if (!list.length) continue;
-			table.createEl("tr", { cls: "dcw-section" }).createEl("td", { text: label, attr: { colspan: cols.length } });
+			table.createEl("tr", { cls: "dcw-section" }).createEl("td", { text: label, attr: { colspan: span } });
 			for (const r of list) {
 				const p = r.part;
-				const tr = table.createEl("tr", { cls: [!lib && !r.used ? "is-unused" : "", r.excluded ? "is-excluded" : ""].join(" ").trim() });
+				const tr = table.createEl("tr", { cls: [!lib && !r.used ? "is-unused" : "", r.excluded ? "is-excluded" : "", picked?.has(p.id) ? "is-picked" : ""].join(" ").trim() });
 				tr.ondblclick = () => this.editPart(p);
-				for (const key of ["number", "internalNumber", "manufacturer", "description", "price"] as const) {
-					const input = tr.createEl("td").createEl("input", { value: String(p[key] ?? ""), type: key === "price" ? "number" : "text" });
-					if (key === "number") input.placeholder = "Part number";
-					input.onchange = () => {
-						const v = input.value.trim();
-						if (key === "price") p.price = Number(v) || 0;
-						else if (key === "internalNumber") { if (v) p.internalNumber = v; else delete p.internalNumber; }
-						else p[key] = v;
-						this.changed();
-					};
-				}
-				if (!lib) {
-					tr.createEl("td", { text: !r.used ? "Not used" : qty(r) + (r.excluded ? " (excluded)" : "") });
-					tr.createEl("td", { text: cur(r.total) });
-				}
-				if (libs.length) {
-					const td = tr.createEl("td", { cls: "dcw-libs" });
-					for (const [path, l] of libs) {
-						const st = syncStatus(p, this.h, l), name = path.split("/").pop()!.replace(/\.harnesslib$/, "");
-						const push = () => this.writeLib(path, x => { copyPart(p, this.h, x); });
-						if (st === "missing") td.createEl("button", { text: `+ ${name}`, attr: { "aria-label": `Add to ${path}` } }).onclick = push;
-						else if (st === "in-sync") td.createSpan({ text: `✓ ${name}`, attr: { "aria-label": `In sync with ${path}` } });
-						else if (st === "out-of-sync") {
-							td.createSpan({ text: `≠ ${name} `, attr: { "aria-label": `Out of sync with ${path}` } });
-							td.createEl("button", { text: "Push", attr: { "aria-label": `Update the part in ${path} to match this harness` } }).onclick = push;
-							td.createEl("button", { text: "Pull", attr: { "aria-label": `Update this part to match ${path}` } }).onclick = () => {
-								copyPart(l.parts.find(x => x.number === p.number)!, l, this.h);
-								this.changed();
-							};
-						}
-					}
-				}
-				tr.createEl("td", { cls: "dcw-warn", text: warnings.filter(w => w.id === p.id).map(w => w.message).join("; ") });
+				for (const c of cols) c.cell(tr.createEl("td"), r);
 				const td = tr.createEl("td", { cls: "dcw-row-actions" });
 				td.createEl("button", { text: "✎", attr: { "aria-label": "Edit part" } }).onclick = () => this.editPart(p);
-				td.createEl("button", { text: "✕", attr: { "aria-label": "Delete part" } }).onclick = () => { removePart(this.h, p.id); this.changed(); };
+				td.createEl("button", { text: "✕", attr: { "aria-label": "Delete part" } }).onclick = () => { removePart(h, p.id); this.changed(); };
 			}
 		}
 		if (lib) {
 			if (!rows.length) this.body.createDiv({ cls: "dcw-empty", text: "No parts in this library yet. Add one with “+ Part”, or use “All to library” in a harness." });
 			return;
 		}
-		const fromSubs: BomRow[] = subBom(this.h, p => this.subs.get(p), new Set(this.file ? [this.file.path] : []));
+		const fromSubs = this.onlySelected ? [] : this.subParts();
 		if (fromSubs.length) {
-			table.createEl("tr", { cls: "dcw-section" }).createEl("td", { text: "From sub-harnesses (edit them in their own file)", attr: { colspan: cols.length } });
+			table.createEl("tr", { cls: "dcw-section" }).createEl("td", { text: "From sub-harnesses (edit them in their own file)", attr: { colspan: span } });
 			for (const r of fromSubs) {
 				const tr = table.createEl("tr", { cls: "dcw-readonly" });
-				for (const t of [r.part.number, r.part.internalNumber ?? "", r.part.manufacturer, r.part.description, cur(r.part.price), qty(r), cur(r.total)]) tr.createEl("td", { text: t });
-				tr.createEl("td", { attr: { colspan: cols.length - 7 } });
+				for (const c of cols) tr.createEl("td", { text: c.sub?.(r) ?? "" });
+				tr.createEl("td");
 			}
 		}
-		const total = table.createEl("tr", { cls: "dcw-total" });
-		total.createEl("td", { text: "Total", attr: { colspan: 6 } });
-		total.createEl("td", { text: cur([...rows.filter(r => !r.excluded), ...fromSubs].reduce((s, r) => s + r.total, 0)) });
+		// the total sits in the Total column, or at the end when that column is hidden
+		const total = table.createEl("tr", { cls: "dcw-total" }), at = cols.findIndex(c => c.key === "total");
+		const sum = cur([...rows.filter(r => !r.excluded), ...fromSubs].reduce((s, r) => s + r.total, 0));
+		total.createEl("td", { text: this.onlySelected ? "Total (all parts)" : "Total", attr: { colspan: at > 0 ? at : cols.length } });
+		total.createEl("td", { text: sum });
 		if (!rows.length) this.body.createDiv({ cls: "dcw-empty", text: "No parts yet. Add one with “+ Part”, then assign it to connectors and wires." });
+		else if (this.onlySelected && !shown.length) this.body.createDiv({ cls: "dcw-empty", text: "Nothing selected uses a part. Select components or wires on the Schematic or Layout." });
 	}
 
 	private partSelect(parent: HTMLElement, value: string | undefined, set: (id: string | undefined) => void) {
@@ -707,13 +833,13 @@ function toggleOff(c: Component, pin: number) {
 	if (!c.globals.length) delete c.globals;
 }
 
-/** Pick an existing .harness file to use as a sub-harness, or null for a new one. */
+/** Pick an existing harness file to use as a sub-harness, or null for a new one. */
 class SubPicker extends FuzzySuggestModal<TFile | null> {
 	constructor(app: App, private self: TFile, private done: (f: TFile | null) => void) {
 		super(app);
 		this.setPlaceholder("Choose a harness to use as sub-harness, or create a new one");
 	}
-	getItems() { return [null, ...this.app.vault.getFiles().filter(f => f.extension === "harness" && f !== this.self)]; }
+	getItems() { return [null, ...this.app.vault.getFiles().filter(f => isHarnessExt(f.extension) && f !== this.self)]; }
 	getItemText(f: TFile | null) { return f ? f.path : "＋ New sub-harness"; }
 	onChooseItem(f: TFile | null) { this.done(f); }
 }

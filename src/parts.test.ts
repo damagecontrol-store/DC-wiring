@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { bom, emptyHarness, parseHarness, removePart, subBom, type Harness } from "./model.ts";
-import { effectiveWire, loadedParts, setGaugeUnit } from "./parts.ts";
+import { bom, emptyHarness, parseHarness, removePart, setContact, subBom, type Harness } from "./model.ts";
+import { assignPart, effectiveWire, followPart, loadedParts, partChoices, partFrom, partSummary, partsUsedBy, setGaugeUnit } from "./parts.ts";
 import { fromMm2, toMm2 } from "./units.ts";
 import { validate } from "./validate.ts";
 import { copyPart, syncStatus } from "./library.ts";
@@ -124,4 +124,83 @@ test("library sync by part number, push and pull with accessories", () => {
 	assert.equal(h.parts[0].price, 1);
 	assert.equal(h.parts.length, 6);
 	assert.equal(syncStatus({ ...housing, number: "" }, h, lib), undefined);
+});
+
+test("assign part: fitting parts first, one option per configuration, create from component, assign many", () => {
+	const h = emptyHarness();
+	h.components = [
+		{ id: "C1", kind: "connector", name: "ECU", x: 0, y: 0, pins: 4 },
+		{ id: "C2", kind: "connector", name: "Lamp", x: 0, y: 0, pins: 4 },
+		{ id: "T1", kind: "terminal", name: "T1", x: 0, y: 0, pins: 1, terminal: "male QC" },
+	];
+	h.wires = [{ id: "W1", from: { c: "C1", pin: 1 }, to: { c: "C2", pin: 1 }, color: "red/white", gauge: "0.5", length: 100 }];
+	h.parts = [
+		{ id: "P1", number: "2-pin", manufacturer: "", description: "", price: 0, type: "connector", cavities: 2 },
+		{ id: "P2", number: "4-pin", manufacturer: "", description: "", price: 0, type: "connector", cavities: 4,
+			configurations: [{ name: "Default", items: [] }, { name: "Sealed", items: [] }] },
+		{ id: "P3", number: "QC", manufacturer: "", description: "", price: 0, type: "terminal", terminalType: "quick-connect" },
+	];
+	const c1 = h.components[0];
+	assert.deepEqual(partChoices(h, c1).map(x => [x.part.id, x.config, x.fits]),
+		[["P2", "Default", true], ["P2", "Sealed", true], ["P1", undefined, false], ["P3", undefined, false]]);
+	assert.equal(partChoices(h, h.components[2])[0].part.id, "P3");
+	assignPart(h, [c1, h.components[1]], "P2", "Sealed");
+	assert.deepEqual([c1.partId, c1.config, h.components[1].config], ["P2", "Sealed", "Sealed"]);
+	assignPart(h, [c1], "P2", "Default");
+	assert.equal(c1.config, undefined); // the first configuration is the default
+	assignPart(h, [c1], undefined);
+	assert.equal(c1.partId, undefined);
+	const wp = partFrom(h, h.wires[0]);
+	assert.deepEqual([wp.id, wp.type, wp.colour, wp.stripe, wp.gauge], ["P4", "wire", "red", "white", "0.5"]);
+	assert.equal(partFrom(h, h.components[2]).terminalType, "quick-connect");
+	assert.equal(partFrom(h, c1).cavities, 4);
+});
+
+test("a contact set on a cavity replaces the configuration's, \"\" removes it, and is checked against the wire gauge", () => {
+	const h = withConfig(), c1 = h.components[0];
+	setContact(c1, 2, "SMALL"); // 2.5 mm² wire: too thick for SMALL
+	setContact(c1, 3, "");
+	assert.deepEqual(loadedParts(h, c1).filter(l => l.pin), [
+		{ partId: "SMALL", pin: 1 }, { partId: "SEAL", pin: 1 },
+		{ partId: "SMALL", pin: 2 }, { partId: "SEAL", pin: 2 }, // seal still from the configuration
+	]);
+	assert.deepEqual(validate(h).filter(w => w.id === "C1").map(w => w.message), ["pin 2: contact SMALL does not take 2.5 mm²"]);
+	const bare = h.components[1]; // no part at all: the hand-set contact still counts
+	setContact(bare, 1, "SMALL");
+	assert.deepEqual(loadedParts(h, bare), [{ partId: "SMALL", pin: 1 }]);
+	setContact(c1, 3, undefined);
+	assert.deepEqual(c1.contacts, { 2: "SMALL" });
+	removePart(h, "SMALL");
+	assert.equal(c1.contacts, undefined);
+	assert.throws(() => parseHarness(JSON.stringify({ ...h, components: [{ ...c1, contacts: { 1: 5 } }] })), /contacts/);
+});
+
+test("parts table helpers: spec summary, parts used by a selection, excluded components", () => {
+	const h = withConfig();
+	assert.equal(partSummary({ ...h.parts[0], gender: "female" }), "3 cav · female");
+	assert.equal(partSummary(h.parts[1]), "22 AWG–0.75");
+	assert.equal(partSummary({ id: "X", number: "", manufacturer: "", description: "", price: 0, type: "covering", coveringType: "tape", length: 50 }), "tape · 50 mm");
+	assert.equal(partSummary({ id: "X", number: "", manufacturer: "", description: "", price: 0 }), "");
+	assert.deepEqual([...partsUsedBy(h, { components: ["C1"] })].sort(), ["BOOT", "HOUSING", "PLUG", "SEAL", "SMALL"]);
+	assert.deepEqual([...partsUsedBy(h, { wires: ["W1", "W2"] })], ["WIRE"]);
+	h.components[0].excludeFromBom = true;
+	const r = Object.fromEntries(bom(h).map(r => [r.part.id, [r.qty, r.used]]));
+	assert.deepEqual([r.HOUSING, r.SMALL], [[0, true], [0, false]]);
+});
+
+test("connector parts name their cavities; connectors with as many pins take the names", () => {
+	const h = emptyHarness();
+	h.components = [
+		{ id: "C1", kind: "connector", name: "C1", x: 0, y: 0, pins: 4 },
+		{ id: "C2", kind: "connector", name: "C2", x: 0, y: 0, pins: 2 },
+	];
+	const p = { id: "P1", number: "DT", manufacturer: "", description: "", price: 0, type: "connector" as const, cavities: 4, designations: ["A1", "A2", "B1", "B2"] };
+	h.parts = [p];
+	assignPart(h, h.components, "P1");
+	assert.deepEqual(h.components.map(c => c.cavities), [["A1", "A2", "B1", "B2"], undefined]); // C2 has 2 pins: left alone
+	p.designations = ["1", "2", "3", "X"];
+	followPart(h, p);
+	assert.deepEqual(h.components[0].cavities, ["1", "2", "3", "X"]);
+	assert.deepEqual(partFrom(h, h.components[0]).designations, ["1", "2", "3", "X"]);
+	assert.equal(partFrom(h, h.components[1]).designations, undefined);
 });

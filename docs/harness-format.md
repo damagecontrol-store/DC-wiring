@@ -1,4 +1,6 @@
-# Editing .harness files
+# Editing .DC harness files
+
+Harness files end in `.DC`.
 
 For AI agents and people editing a DC Wiring harness by hand. The file is pretty-printed JSON (tabs); the full schema is `harness.schema.json` next to this file. Obsidian reloads the open view when the file changes on disk.
 
@@ -30,6 +32,6 @@ For AI agents and people editing a DC Wiring harness by hand. The file is pretty
 - `signals` keys are pin numbers as strings. A pin without its own signal shows the signal of its net (everything joined by wires and splices).
 - Colours: CSS names or abbreviations (`rd`, `sw`, `ws`, `ge`, ...), stripe after a slash: `rd/ws`. Gauge is text (`"0.5"`, `"20AWG"`). Length is millimetres.
 - `partId` points into `parts`. A part used on wires is counted in metres (sum of wire lengths), on components in pieces; `price` is per metre or per piece accordingly.
-- Sub-harness blocks (`kind: "harness"`) point at another `.harness` file by vault path in `file`. Their `ports` (`"C4:1"`, exposed connector pins of that file) only grow, so pin numbers stay stable; `pins` equals `ports.length`. The plugin maintains them: don't edit by hand.
+- Sub-harness blocks (`kind: "harness"`) point at another `.DC` file by vault path in `file`. Their `ports` (`"C4:1"`, exposed connector pins of that file) only grow, so pin numbers stay stable; `pins` equals `ports.length`. The plugin maintains them: don't edit by hand.
 - Positions (`x`, `y`, wire `points`, `wiringTable` offsets) are canvas units on a 20-unit grid. Optional; leave `points` out and the wire is routed automatically.
 - `export` holds the title block (`company`, `title`, `drawing`, `date`, `drawnBy`) and `notes` used by exports.

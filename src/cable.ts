@@ -1,5 +1,5 @@
 // Cables (cores + shield) and twisted wires. Pure, no DOM.
-import { nextId, type Component, type Core, type End, type Harness } from "./model.ts";
+import { nextId, type Component, type Core, type End, type Harness, type Part, type Wire } from "./model.ts";
 
 /** "rd 0.5, bk/wh 0.35" -> one core per comma item: colour, then optional gauge. */
 export function parseCores(s: string): Core[] {
@@ -20,10 +20,19 @@ export function coreOf(h: Harness, e: End): Core | undefined {
 	return c?.kind === "cable" ? c.cores?.[e.pin - 1] : undefined;
 }
 
+/** Wires on a cable's cores (or shield) that would not exist with these cores. */
+export function wiresLost(h: Harness, c: Component, cores: Core[], shield: boolean): Wire[] {
+	const gone = (e: End) => e.c === c.id && (e.pin === 0 ? !shield : e.pin > cores.length);
+	return h.wires.filter(w => gone(w.from) || gone(w.to));
+}
+
+/** The cores and shield a cable part gives the cables using it, or undefined when it lists no cores. */
+export const partCores = (p?: Part) => p?.type === "cable" && p.coreList?.length ? { cores: p.coreList.map(k => ({ ...k })), shield: !!p.shield } : undefined;
+
 /** Sets a cable's cores and shield, dropping wires on cores that no longer exist. */
 export function setCores(h: Harness, c: Component, cores: Core[], shield: boolean) {
-	const gone = (e: End) => e.c === c.id && (e.pin === 0 ? !shield : e.pin > cores.length);
-	h.wires = h.wires.filter(w => !gone(w.from) && !gone(w.to));
+	const lost = new Set(wiresLost(h, c, cores, shield));
+	h.wires = h.wires.filter(w => !lost.has(w));
 	c.cores = cores;
 	c.pins = cores.length;
 	if (shield) c.shield = true; else delete c.shield;
@@ -34,7 +43,7 @@ export function twist(h: Harness, ids: string[]) {
 	const ws = h.wires.filter(w => ids.includes(w.id));
 	if (ws.length < 2) return;
 	const old = new Set(ws.flatMap(w => w.twist ?? []));
-	const id = [...old][0] ?? nextId(h, "T", h.wires.flatMap(w => w.twist ? [{ id: w.twist }] : []));
+	const id = [...old][0] ?? nextId(h, "TW", h.wires.flatMap(w => w.twist ? [{ id: w.twist }] : []));
 	for (const w of h.wires) if (ids.includes(w.id) || (w.twist && old.has(w.twist))) w.twist = id;
 }
 

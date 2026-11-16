@@ -77,7 +77,7 @@
 			"x": 760,
 			"y": 40,
 			"pins": 2,
-			"file": "Engine harness.harness",
+			"file": "Engine harness.DC",
 			"ports": [
 				"C1:1",
 				"C1:2"

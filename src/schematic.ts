@@ -2,7 +2,7 @@ import { Menu, Notice } from "obsidian";
 import { cavName, compLabel, duplicate, labelOf, matches, mateError, moveConnections, netSignals, PREFIX, resolveTarget, selComps } from "./components.ts";
 import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, wireLabel, type Component, type End, type Harness, type Wire } from "./model.ts";
 import { routeWires } from "./bundles.ts";
-import { effectiveWire } from "./parts.ts";
+import { effectiveWire, loadedParts } from "./parts.ts";
 import { insertIndex, labelPoint, orthoPoints, roundedPath, routeAround, separate, STUB, type P, type Rect } from "./route.ts";
 import { wireColors } from "./ui.ts";
 import { drawWiringTables, wiringTableItem } from "./wiringtable.ts";
@@ -27,6 +27,8 @@ export interface Host {
 	editComponent(c: Component): void;
 	editWire(id: string): void;
 	editSignal(c: Component, pin: number): void;
+	pickPart(x: Component | Wire): void;
+	pickContact(c: Component, pin: number): void;
 	subs: Map<string, Harness>; // loaded sub-harness files by vault path
 	openSub(c: Component): void;
 	addSub(x: number, y: number): void;
@@ -61,6 +63,17 @@ const faceTop = (c: Component, hasPart: boolean) => c.y + HDR + c.pins * ROW + (
 const twoPin = (c: Component) => c.kind === "diode" || c.kind === "resistor";
 const centerX = (c: Component) => c.kind === "splice" ? c.x : c.x + (twoPin(c) ? DW : W) / 2;
 const snap = (v: number) => Math.round(v / GRID) * GRID;
+
+/** "Assign part…", or the assigned part's number so it reads as what is there now. */
+export function partItem(m: Menu, h: Harness, x: Component | Wire, n: number, pick: () => void, changed: () => void) {
+	const p = h.parts.find(p => p.id === x.partId), many = n > 1 ? ` to ${n}` : "";
+	m.addItem(i => i.setTitle(p ? `Part: ${p.number || p.id}${"config" in x && x.config ? " · " + x.config : ""} (change${many}…)` : `Assign part${many}…`)
+		.setIcon("package").onClick(pick));
+	if (p && "kind" in x) m.addItem(i => i.setTitle(x.excludeFromBom ? "Include in BOM" : "Exclude from BOM").setIcon(x.excludeFromBom ? "list-plus" : "list-x").onClick(() => {
+		if (x.excludeFromBom) delete x.excludeFromBom; else x.excludeFromBom = true;
+		changed();
+	}));
+}
 
 function toggleIn(c: Component, key: "nc" | "globals", pin: number) {
 	const list = c[key] ?? [], next = list.includes(pin) ? list.filter(p => p !== pin) : [...list, pin];
@@ -263,6 +276,7 @@ export class Schematic {
 			grp.forEach((r, i) => r.offset = (right(r).y >= left(r).y ? -1 : 1) * (i - (grp.length - 1) / 2) * 6);
 		}
 
+		const labels: { x: number; y: number }[] = []; // wire labels drawn so far, so side-by-side wires don't print on top of each other
 		for (const { w, a, b, offset } of routed) {
 			const pts = orthoPoints(a, b, w.points, offset);
 			const d = roundedPath(pts);
@@ -277,7 +291,12 @@ export class Schematic {
 			el(g, "path", { d, class: "dcw-hit" });
 			const lp = labelPoint(pts);
 			const label = wireLabel(h, w);
-			if (label) el(g, "text", { x: lp.x, y: lp.y - 5, class: "dcw-wlabel" }, label);
+			if (label) {
+				let y = lp.y - 5;
+				while (labels.some(q => Math.abs(q.x - lp.x) < 40 && Math.abs(q.y - y) < 11)) y += 12;
+				labels.push({ x: lp.x, y });
+				el(g, "text", { x: lp.x, y, class: "dcw-wlabel" }, label);
+			}
 			// shortcut: ident and twist marks sit level at the label point, also on vertical runs; follow the path if that reads badly
 			if (w.ident) this.ident(g, lp, w.ident);
 			if (w.twist) for (const s of [-1, 1]) el(g, "path", { d: `M${lp.x - 12},${lp.y + 12} q3,${s * 5} 6,0 t6,0 t6,0 t6,0`, class: "dcw-twist" });
@@ -313,7 +332,10 @@ export class Schematic {
 				el(g, "rect", { x: c.x, y, width: W, height: ROW, class: "dcw-row", "data-row": p });
 				if (c.kind === "harness") {
 					const ref = c.ports?.[p - 1] ?? "", label = sub && portLabel(sub, ref);
-					el(g, "text", { x: c.x + 8, y: y + 14, class: label || !sub ? "dcw-signal" : "dcw-signal is-missing" }, label || `${ref}${sub ? " (missing)" : ""}`);
+					const full = label || `${ref}${sub ? " (missing)" : ""}`;
+					// the block is a fixed width: cut long labels, the full text is in the tooltip
+					const txt = el(g, "text", { x: c.x + 8, y: y + 14, class: label || !sub ? "dcw-signal" : "dcw-signal is-missing" }, full.length > 21 ? full.slice(0, 20) + "…" : full);
+					el(txt, "title", {}, full);
 					for (const x of [c.x, c.x + W]) el(g, "circle", { cx: x, cy: y + ROW / 2, r: 4, class: "dcw-pin", "data-pin": p, "data-comp": c.id });
 					continue;
 				}
@@ -645,6 +667,8 @@ export class Schematic {
 		if (wire) {
 			m.addItem(i => i.setTitle("Edit wire").setIcon("pencil").onClick(() => this.host.editWire(wire)));
 			const w = h.wires.find(w => w.id === wire)!;
+			partItem(m, h, w, this.host.sel?.wires?.includes(wire) ? this.host.sel.wires.length : 1, () => this.host.pickPart(w), () => this.host.changed());
+			m.addItem(i => i.setTitle("Select wires on net").setIcon("network").onClick(() => this.host.select({ wires: [...netWires(h, { wires: [wire] })] })));
 			m.addItem(i => i.setTitle("Auto route").setIcon("route").onClick(() => { this.autoRoute([wire]); this.host.changed(); }));
 			if (w.points?.length) m.addItem(i => i.setTitle("Clear bend points").setIcon("eraser").onClick(() => { delete w.points; this.host.changed(); }));
 			m.addItem(i => i.setTitle("Delete wire").setIcon("trash").onClick(() => {
@@ -661,6 +685,11 @@ export class Schematic {
 					toggleIn(c, "globals", row);
 					this.host.changed();
 				}));
+				if (c.kind === "connector") {
+					const own = c.contacts?.[row], cur = h.parts.find(p => p.id === loadedParts(h, c).find(l => l.pin === row && ["contact", "cavity-plug"].includes(h.parts.find(p => p.id === l.partId)?.type ?? ""))?.partId);
+					const title = own === "" ? "Contact: none (change…)" : cur ? `Contact: ${cur.number || cur.id}${own === undefined ? " from configuration" : ""} (change…)` : "Assign contact…";
+					m.addItem(i => i.setTitle(title).setIcon("pin").onClick(() => this.host.pickContact(c, row)));
+				}
 				m.addItem(i => i.setTitle(nc ? "Clear not connected" : "Mark as not connected").setIcon("circle-slash").onClick(() => {
 					if (!nc && h.wires.some(w => pinKey(w.from) === `${c.id}:${row}` || pinKey(w.to) === `${c.id}:${row}`)) return void new Notice("DC Wiring: remove the wires on this cavity first.");
 					toggleIn(c, "nc", row);
@@ -693,6 +722,7 @@ export class Schematic {
 			const kind = c.kind === "harness" ? "sub-harness" : c.kind;
 			if (c.kind === "harness") m.addItem(i => i.setTitle("Open sub-harness").setIcon("file-symlink").onClick(() => this.host.openSub(c)));
 			m.addItem(i => i.setTitle(`Edit ${kind}`).setIcon("pencil").onClick(() => this.host.editComponent(c)));
+			if (c.kind !== "note") partItem(m, h, c, many.includes(c.id) ? h.components.filter(x => many.includes(x.id) && x.kind === c.kind).length : 1, () => this.host.pickPart(c), () => this.host.changed());
 			wiringTableItem(m, c, this.host);
 			m.addItem(i => i.setTitle(c.kind === "harness" ? "Remove sub-harness (keeps its file)" : `Delete ${kind}`).setIcon("trash").onClick(() => {
 				removeComponent(h, c.id);
@@ -715,10 +745,17 @@ export class Schematic {
 		m.showAtMouseEvent(e);
 	}
 
-	/** Middle of the visible canvas, snapped to the grid. */
+	/** Middle of the visible canvas, snapped to the grid, stepped aside while something already sits there. */
 	center() {
 		const r = this.svg.getBoundingClientRect();
-		return { x: snap((r.width / 2 - this.view.x) / this.view.z), y: snap((r.height / 2 - this.view.y) / this.view.z) };
+		let x = snap((r.width / 2 - this.view.x) / this.view.z), y = snap((r.height / 2 - this.view.y) / this.view.z);
+		// a new 4-pin connector's box, plus a gap; move down until it overlaps nothing
+		const free = () => !this.host.h.components.some(c => {
+			const e = this.extent(c);
+			return x < e.x2 + GRID && x + W > e.x1 - GRID && y < e.y2 + GRID && y + HDR + 4 * ROW > e.y1 - GRID;
+		});
+		for (let i = 0; i < 100 && !free(); i++) y += GRID;
+		return { x, y };
 	}
 
 	add(kind: Exclude<Component["kind"], "harness" | "cable">, x?: number, y?: number) {

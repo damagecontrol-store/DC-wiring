@@ -1,5 +1,8 @@
-// Harness document model. Stored as pretty JSON in a .harness file.
-import { wireLength } from "./bundles.ts";
+// Harness document model. Stored as pretty JSON in a .DC file.
+
+/** A harness file: "name.DC" (Obsidian lowercases extensions). */
+export const isHarnessExt = (ext: string) => ext === "dc";
+import { routeWires, wireLength } from "./bundles.ts";
 
 import { loadedParts, effectiveWire } from "./parts.ts";
 import type { GaugeUnit, LengthUnit } from "./units.ts";
@@ -20,7 +23,7 @@ export interface Component {
 	signals?: Record<number, string>; // pin -> label
 	partId?: string;
 	exposed?: boolean; // connector: its pins show on the block when this harness is used as a sub-harness
-	file?: string; // sub-harness block: vault path of the .harness file
+	file?: string; // sub-harness block: vault path of the .DC file
 	ports?: string[]; // sub-harness block: "C4:1" per pin, in pin order. Only grows, so pin numbers stay stable
 	wiringTable?: { dx: number; dy: number }; // schematic: wiring table shown at this offset from the component
 	cores?: Core[]; // cable: core n is pin n ("CB1.n"); wires on both sides of a core share its pin, so nets pass through
@@ -28,6 +31,8 @@ export interface Component {
 	length?: number; // cable: mm, counted in the BOM as metres
 	pos?: { x: number; y: number }; // centre on the Layout view; unset = its schematic x, y
 	config?: string; // name of the part's configuration in use; the part's first one when unset
+	excludeFromBom?: boolean; // this component's part and accessories are not counted
+	contacts?: Record<number, string>; // pin -> contact or cavity plug part id, overriding the configuration; "" = none
 	cavities?: string[]; // cavity designations per pin ("A1"); empty or missing = the pin number
 	nc?: number[]; // pins marked not connected: no wires allowed
 	globals?: number[]; // pins whose signal is global: same name anywhere = same net
@@ -73,13 +78,16 @@ export interface Part {
 	excludeFromBom?: boolean;
 	// type-specific, see PART_TYPES in parts.ts for which type uses which
 	cavities?: number;
+	designations?: string[]; // connector: cavity names, one per cavity; connectors using the part take them
+	image?: string; // vault path of a picture of the part
 	gender?: string; // connector: male/female, contact: pin/socket
 	shell?: boolean;
 	gauge?: string; // wire; plain number is in the harness gauge unit
 	stripe?: string;
 	insulation?: number; // mm
 	diameter?: number; // mm
-	cores?: number;
+	cores?: number; // cable: core count (kept in step with coreList)
+	coreList?: Core[]; // cable: colour and gauge per core; cables using the part take these cores
 	shield?: boolean;
 	terminalType?: string;
 	size?: string; // terminal stud or tab size
@@ -110,9 +118,10 @@ export interface Bundle {
 	length: number; // mm
 	points?: { x: number; y: number }[]; // layout bend points, in order from -> to
 	label?: string;
+	coverings?: string[]; // covering part ids; a cut-to-length one counts the bundle's length
 }
 
-export interface BranchPoint { id: string; x: number; y: number } // BP1
+export interface BranchPoint { id: string; x: number; y: number; coverings?: string[] } // BP1; coverings: covering or boot part ids, one piece each
 
 export interface Harness {
 	version: 1;
@@ -135,7 +144,7 @@ export interface Harness {
 export const emptyHarness = (): Harness => ({ version: 1, components: [], wires: [], parts: [] });
 
 /**
- * Reads a .harness file. Throws on anything that would break drawing (missing ids or wire ends),
+ * Reads a .DC file. Throws on anything that would break drawing (missing ids or wire ends),
  * so the view opens it read-only. Fills harmless defaults for display fields.
  */
 export function parseHarness(text: string): Harness {
@@ -159,6 +168,8 @@ export function parseHarness(text: string): Harness {
 		return { ...p, number: p.number ?? "", manufacturer: p.manufacturer ?? "", description: p.description ?? "", price: p.price ?? 0 };
 	});
 	for (const b of h.bundles ?? []) if (typeof b?.id !== "string" || typeof b.from !== "string" || typeof b.to !== "string") throw new Error(`bundle ${b?.id ?? "?"} needs an id, "from" and "to"`);
+	for (const c of Array.isArray(h.components) ? h.components : []) if (c?.contacts !== undefined && !(c.contacts && typeof c.contacts === "object" && Object.values(c.contacts).every(v => typeof v === "string"))) throw new Error(`${c.id}: "contacts" must map pins to part ids`);
+	for (const x of [...h.bundles ?? [], ...h.branchPoints ?? []]) if (x.coverings !== undefined && !(Array.isArray(x.coverings) && x.coverings.every(c => typeof c === "string"))) throw new Error(`${x.id}: "coverings" must be a list of part ids`);
 	// keep fields this version doesn't know about, so saving never drops them
 	return { ...h, version: 1, components, wires, parts };
 }
@@ -246,17 +257,22 @@ export interface BomRow { part: Part; qty: number; unit: string; total: number; 
 
 /** Bill of materials: pieces for components and their configuration accessories, metres for wires. Excluded parts are flagged, not dropped. */
 export function bom(h: Harness): BomRow[] {
-	const acc = new Map<string, number>();
-	for (const c of h.components) for (const l of loadedParts(h, c)) acc.set(l.partId, (acc.get(l.partId) ?? 0) + 1);
+	const acc = new Map<string, number>(), routes = routeWires(h); // routing once: per wire it froze big harnesses
+	const counted = h.components.filter(c => !c.excludeFromBom);
+	for (const c of counted) for (const l of loadedParts(h, c)) acc.set(l.partId, (acc.get(l.partId) ?? 0) + 1);
+	// coverings: a piece per bundle or branch point, or the bundle's length when cut to length
+	const covMm = new Map<string, number>(), cov = (id: string, n: number, m: Map<string, number>) => m.set(id, (m.get(id) ?? 0) + n);
+	for (const b of h.bundles ?? []) for (const id of b.coverings ?? []) h.parts.find(p => p.id === id)?.cutToLength ? cov(id, b.length, covMm) : cov(id, 1, acc);
+	for (const bp of h.branchPoints ?? []) for (const id of bp.coverings ?? []) cov(id, 1, acc);
 	return h.parts.map(part => {
-		const comps = h.components.filter(c => c.partId === part.id && c.kind !== "cable").length + (h.groups ?? []).filter(g => g.partId === part.id).length + (acc.get(part.id) ?? 0);
-		const mm = h.wires.filter(w => w.partId === part.id).reduce((s, w) => s + wireLength(h, w), 0)
-			+ h.components.filter(c => c.kind === "cable" && c.partId === part.id).reduce((s, c) => s + (c.length || 0), 0);
-		const onWires = h.wires.some(w => w.partId === part.id) || h.components.some(c => c.kind === "cable" && c.partId === part.id);
+		const comps = counted.filter(c => c.partId === part.id && c.kind !== "cable").length + (h.groups ?? []).filter(g => g.partId === part.id).length + (acc.get(part.id) ?? 0);
+		const mm = h.wires.filter(w => w.partId === part.id).reduce((s, w) => s + wireLength(h, w, routes), 0)
+			+ counted.filter(c => c.kind === "cable" && c.partId === part.id).reduce((s, c) => s + (c.length || 0), 0) + (covMm.get(part.id) ?? 0);
+		const onWires = h.wires.some(w => w.partId === part.id) || h.components.some(c => c.kind === "cable" && c.partId === part.id) || covMm.has(part.id);
 		const t = part.type;
 		const isWire = t ? t === "wire" || t === "cable" || (t === "covering" && !!part.cutToLength) : mm > 0 || (comps === 0 && onWires);
 		const qty = isWire ? mm / 1000 : comps;
-		return { part, qty, unit: isWire ? "m" : "pcs", total: qty * (part.price || 0), used: comps > 0 || onWires, excluded: !!part.excludeFromBom };
+		return { part, qty, unit: isWire ? "m" : "pcs", total: qty * (part.price || 0), used: comps > 0 || onWires || h.components.some(c => c.partId === part.id), excluded: !!part.excludeFromBom };
 	});
 }
 
@@ -268,10 +284,22 @@ export function removeComponent(h: Harness, id: string) {
 	if (h.mates) h.mates = h.mates.filter(m => m.a !== id && m.b !== id);
 }
 
+/** Overrides a cavity's contact: a part id, "" for none, or undefined to go back to the configuration's. */
+export function setContact(c: Component, pin: number, partId: string | undefined) {
+	const next = { ...c.contacts };
+	if (partId === undefined) delete next[pin]; else next[pin] = partId;
+	if (Object.keys(next).length) c.contacts = next; else delete c.contacts;
+}
+
 export function removePart(h: Harness, id: string) {
 	h.parts = h.parts.filter(p => p.id !== id);
 	for (const x of [...h.components, ...h.wires, ...h.groups ?? []]) if (x.partId === id) delete x.partId;
 	for (const p of h.parts) for (const cf of p.configurations ?? []) cf.items = cf.items.filter(i => i.partId !== id);
+	for (const c of h.components) for (const [pin, p] of Object.entries(c.contacts ?? {})) if (p === id) setContact(c, Number(pin), undefined);
+	for (const x of [...h.bundles ?? [], ...h.branchPoints ?? []]) if (x.coverings) {
+		x.coverings = x.coverings.filter(c => c !== id);
+		if (!x.coverings.length) delete x.coverings;
+	}
 }
 
 // --- Sub-harnesses ---

@@ -1,6 +1,8 @@
-import { FuzzySuggestModal, Modal, Setting, type App, type TFile } from "obsidian";
+import { FuzzySuggestModal, Modal, Setting, TFile, type App } from "obsidian";
+import { Picker } from "./ui.ts";
 import type { Harness, Part, PartType } from "./model.ts";
 import { HAS_CONFIGS, PART_TYPES, type PartField } from "./parts.ts";
+import { formatCores, parseCores } from "./cable.ts";
 
 const COMMON: PartField[] = [
 	{ key: "number", label: "Part number" },
@@ -15,7 +17,8 @@ const REQUIRED = ["number", "manufacturer", "description", "price"];
 
 /** Edits a part in place, showing the fields of its type. Calls done once on close, so the edit is one undo step. */
 export class PartModal extends Modal {
-	constructor(app: App, private h: Harness, private p: Part, private done: () => void) { super(app); }
+	/** manufacturers: names used in this harness and the libraries, suggested while typing so they are spelled one way */
+	constructor(app: App, private h: Harness, private p: Part, private done: () => void, private manufacturers: string[] = []) { super(app); }
 
 	onOpen() { this.draw(); }
 
@@ -29,6 +32,9 @@ export class PartModal extends Modal {
 	private draw() {
 		const { p, contentEl: el } = this;
 		const rec = p as unknown as Record<string, unknown>;
+		// redrawing empties the dialog, which would jump it back to the top
+		const top = this.modalEl.scrollTop, inner = el.scrollTop;
+		window.setTimeout(() => { this.modalEl.scrollTop = top; el.scrollTop = inner; });
 		el.empty();
 		this.titleEl.setText(`Part ${p.number || p.id}`);
 		// empty optional fields are dropped so the file stays small and library sync compares cleanly
@@ -44,17 +50,47 @@ export class PartModal extends Modal {
 			.onChange(v => { set("type", v as PartType); this.draw(); }));
 		const field = (f: PartField) => {
 			const s = new Setting(el).setName(f.label);
-			if (f.kind === "bool") s.addToggle(t => t.setValue(!!rec[f.key]).onChange(v => set(f.key, v)));
+			if (f.kind === "cores") s.addText(t => t.setValue(formatCores(p.coreList)).onChange(v => {
+				const cores = parseCores(v);
+				set("coreList", cores.length ? cores : undefined);
+				set("cores", cores.length || undefined);
+			}));
+			else if (f.kind === "bool") s.addToggle(t => t.setValue(!!rec[f.key]).onChange(v => set(f.key, v)));
 			else if (f.options) s.addDropdown(d => d.addOption("", "—").addOptions(Object.fromEntries(f.options!.map(o => [o, o])))
 				.setValue(String(rec[f.key] ?? "")).onChange(v => set(f.key, v)));
-			else s.addText(t => t.setValue(String(rec[f.key] ?? "")).onChange(v => {
-				set(f.key, f.kind === "number" ? (v.trim() ? Number(v) : undefined) : v.trim());
-				if (f.key === "number") this.titleEl.setText(`Part ${v.trim() || p.id}`);
+			else if (f.kind === "list") s.addText(t => t.setValue((rec[f.key] as string[] | undefined)?.join(", ") ?? "").onChange(v => {
+				const list = v.split(",").map(x => x.trim());
+				set(f.key, list.some(Boolean) ? list : undefined);
 			}));
+			else s.addText(t => {
+				t.setValue(String(rec[f.key] ?? "")).onChange(v => {
+					set(f.key, f.kind === "number" ? (v.trim() ? Number(v) : undefined) : v.trim());
+					if (f.key === "number") this.titleEl.setText(`Part ${v.trim() || p.id}`);
+				});
+				if (f.key === "manufacturer" && this.manufacturers.length) {
+					const list = el.createEl("datalist", { attr: { id: `dcw-mfr-${p.id}` } });
+					for (const m of this.manufacturers) list.createEl("option", { value: m });
+					t.inputEl.setAttr("list", list.id);
+				}
+			});
 		};
 		[...COMMON, ...(p.type ? PART_TYPES[p.type].fields : []), { key: "excludeFromBom", label: "Exclude from BOM", kind: "bool" } as PartField].forEach(field);
+		this.drawImage();
 		if (p.type && HAS_CONFIGS.includes(p.type)) this.drawConfigs();
 		new Setting(el).addButton(b => b.setButtonText("Done").setCta().onClick(() => this.close()));
+	}
+
+	/** A picture of the part: any image file in the vault. */
+	private drawImage() {
+		const { p, contentEl: el } = this;
+		const file = p.image ? this.app.vault.getAbstractFileByPath(p.image) : null;
+		const s = new Setting(el).setName("Image").setDesc(p.image && !file ? `${p.image} is missing` : "")
+			.addButton(b => b.setButtonText(p.image ? "Change…" : "Choose…").onClick(() => {
+				const files = this.app.vault.getFiles().filter(f => /^(png|jpe?g|gif|svg|webp)$/i.test(f.extension));
+				new Picker(this.app, "Choose an image from the vault", files, f => f.path, f => { p.image = f.path; this.draw(); }).open();
+			}));
+		if (p.image) s.addExtraButton(b => b.setIcon("x").setTooltip("Remove image").onClick(() => { delete p.image; this.draw(); }));
+		if (file instanceof TFile) el.createEl("img", { cls: "dcw-part-image", attr: { src: this.app.vault.getResourcePath(file), alt: p.number || p.id } });
 	}
 
 	/** Configurations: named accessory lists. Contacts, plugs and seals get a rule for which cavities they go into. */
@@ -66,6 +102,10 @@ export class PartModal extends Modal {
 		for (const cf of cfs) {
 			new Setting(el).setName("Configuration").setDesc(cf === cfs[0] ? "Used unless a component picks another" : "")
 				.addText(t => t.setValue(cf.name).onChange(v => cf.name = v.trim() || cf.name))
+				.addExtraButton(b => b.setIcon("copy").setTooltip("Duplicate configuration").onClick(() => {
+					cfs.splice(cfs.indexOf(cf) + 1, 0, { name: `${cf.name} copy`, items: cf.items.map(i => ({ ...i })) });
+					this.draw();
+				}))
 				.addExtraButton(b => b.setIcon("trash").setTooltip("Delete configuration").onClick(() => { cfs.splice(cfs.indexOf(cf), 1); this.draw(); }));
 			for (const it of cf.items) {
 				const type = this.h.parts.find(x => x.id === it.partId)?.type;

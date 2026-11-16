@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { bom, computeNets, emptyHarness, parseHarness, removeComponent, signalOf, type Harness } from "./model.ts";
-import { coreName, parseCores, setCores, twist, twistedWith, untwist } from "./cable.ts";
+import { coreName, parseCores, partCores, setCores, twist, twistedWith, untwist, wiresLost } from "./cable.ts";
+import { fitsItem, partFrom } from "./parts.ts";
 import { addToGroup, splitGroup, wireLocked } from "./groups.ts";
+import { routeWires, wireLength } from "./bundles.ts";
 
 const wire = (id: string, a: string, b: string) => {
 	const [ac, ap] = a.split(":"), [bc, bp] = b.split(":");
@@ -51,7 +53,7 @@ test("twist joins groups, untwist dissolves a group of one", () => {
 	untwist(h, "W1");
 	assert.ok(h.wires.every(w => !w.twist));
 	twist(h, ["W1", "W2"]);
-	assert.equal(h.wires[0].twist, "T2"); // ids are not reused
+	assert.equal(h.wires[0].twist, "TW2"); // ids are not reused
 });
 
 test("groups: one group per component, locked inside only, group part is one BOM line, delete cleans up", () => {
@@ -92,4 +94,35 @@ test("save group as sub-harness: moves members and inner wires, reconnects leavi
 	assert.deepEqual([block.id, block.name, block.file, block.ports, block.x, block.y], ["H1", "Front", "Front.harness", ["C1:1", "C1:2"], 100, 40]);
 	assert.deepEqual(h.wires.map(w => [w.id, w.to]), [["W2", { c: "H1", pin: 2 }]]);
 	assert.equal(h.groups, undefined);
+});
+
+test("save group as sub-harness: bundles into the group end at the block, so wires stay routed", () => {
+	const h = emptyHarness();
+	h.components = [
+		{ id: "C1", kind: "connector", name: "ECU", x: 0, y: 0, pins: 2, pos: { x: 10, y: 20 } },
+		{ id: "C3", kind: "connector", name: "Plug", x: 50, y: 0, pins: 2 },
+		{ id: "C2", kind: "connector", name: "Lamp", x: 600, y: 0, pins: 2 },
+	];
+	h.wires = [wire("W1", "C1:1", "C3:1"), wire("W2", "C2:1", "C1:2")];
+	h.bundles = [{ id: "B1", from: "C1", to: "C3", length: 100 }, { id: "B2", from: "C2", to: "C1", length: 800 }];
+	h.mates = [{ a: "C3", b: "C2" }];
+	addToGroup(h, "C1", undefined, "Front");
+	addToGroup(h, "C3", "G1");
+	splitGroup(h, "G1", "Front.DC");
+	assert.deepEqual(h.bundles, [{ id: "B2", from: "C2", to: "H1", length: 800 }]); // inside one dropped, crossing one repointed
+	assert.equal(h.mates?.length, 0);
+	assert.deepEqual(h.components.find(c => c.id === "H1")!.pos, { x: 10, y: 20 });
+	assert.equal(wireLength(h, h.wires[0], routeWires(h)), 800); // W2 still routed
+});
+
+test("cable parts list their cores; a cable taking the part gets them, and partFrom copies them back", () => {
+	const h = cabled(), cb = h.components[1];
+	const p = { id: "P9", number: "3x0.5", manufacturer: "", description: "", price: 1, type: "cable" as const, coreList: parseCores("rd 0.5"), cores: 1 };
+	assert.equal(partCores({ ...p, type: "wire" }), undefined);
+	const pc = partCores(p)!;
+	assert.deepEqual(wiresLost(h, cb, pc.cores, pc.shield).map(w => w.id), ["W3", "W4"]); // core 2 and the shield go
+	assert.equal(fitsItem(p, cb), false); // 1 core vs 2
+	const back = partFrom(h, cb);
+	assert.deepEqual([back.cores, back.coreList, back.shield], [2, parseCores("ye 0.35, gn 0.35"), true]);
+	assert.equal(fitsItem(back, cb), true);
 });

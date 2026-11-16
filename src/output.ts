@@ -1,12 +1,10 @@
 // Export menu and commands: writes CSV, SVG and HTML files next to the harness in the vault.
 import { Menu, Notice, Platform } from "obsidian";
 import { bomTable, connectionsTable, csv, cutList, reportHtml, wiringTables } from "./export.ts";
-import { subBom } from "./model.ts";
 import { Schematic } from "./schematic.ts";
 import { FormModal, freePath } from "./ui.ts";
 import type { HarnessView } from "./view.ts";
 
-const fromSubs = (v: HarnessView) => subBom(v.h, p => v.subs.get(p), new Set(v.file ? [v.file.path] : []));
 
 async function save(v: HarnessView, suffix: string, ext: string, text: string) {
 	const f = v.file;
@@ -48,7 +46,7 @@ function schematicSvg(v: HarnessView): string {
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
-const report = (v: HarnessView) => reportHtml(v.h, { title: v.file?.basename, date: today(), ...v.h.export }, schematicSvg(v), fromSubs(v));
+const report = (v: HarnessView) => reportHtml(v.h, { title: v.file?.basename, date: today(), ...v.h.export }, schematicSvg(v), v.subParts());
 
 /** Prints the report with the system dialog, which offers "Save as PDF". */
 function print(v: HarnessView) {
@@ -77,7 +75,7 @@ function editTitleBlock(v: HarnessView) {
 }
 
 export const EXPORTS: { id: string; name: string; run: (v: HarnessView) => unknown; desktop?: boolean }[] = [
-	{ id: "export-bom", name: "Export BOM (CSV)", run: v => save(v, "BOM", "csv", csv(bomTable(v.h, fromSubs(v)))) },
+	{ id: "export-bom", name: "Export BOM (CSV)", run: v => save(v, "BOM", "csv", csv(bomTable(v.h, v.subParts()))) },
 	{ id: "export-connections", name: "Export connections (CSV)", run: v => save(v, "Connections", "csv", csv(connectionsTable(v.h))) },
 	{ id: "export-wiring-tables", name: "Export wiring tables per connector (CSV)", run: v => save(v, "Wiring tables", "csv", csv(wiringTables(v.h))) },
 	{ id: "export-cut-list", name: "Export cut list (CSV)", run: v => save(v, "Cut list", "csv", csv(cutList(v.h))) },

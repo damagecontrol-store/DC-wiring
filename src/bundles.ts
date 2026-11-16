@@ -78,9 +78,8 @@ export function routeWires(h: Harness): Map<string, Route> {
 	return out;
 }
 
-// shortcut: without routes this routes the whole harness per call; pass routes when looping over many wires
-/** Length to cut: the bundle path length when the wire is routed, else its typed length. */
-export function wireLength(h: Harness, w: Wire, routes = routeWires(h)): number {
+/** Length to cut: the bundle path length when the wire is routed, else its typed length. Pass routeWires(h), worked out once. */
+export function wireLength(h: Harness, w: Wire, routes: Map<string, Route>): number {
 	return routes.get(w.id)?.length ?? (w.length || 0);
 }
 
@@ -95,6 +94,7 @@ export function splitBundle(h: Harness, id: string, p: P): string | undefined {
 	h.branchPoints.push(bp);
 	const rest: Bundle = { id: nextId(h, "B", h.bundles!), from: bp.id, to: b.to, length: b.length - first };
 	if (i < via.length) rest.points = via.slice(i);
+	if (b.coverings) rest.coverings = [...b.coverings]; // the covering runs on over both halves
 	b.to = bp.id;
 	b.length = first;
 	if (i) b.points = via.slice(0, i); else delete b.points;
@@ -114,6 +114,9 @@ export function removeBranchPoint(h: Harness, id: string) {
 		if (b !== at[0] || !a || !z || a.from === z.to) return at.includes(b) ? [] : [b];
 		const m: Bundle = { ...a, to: z.to, length: a.length + z.length, points: [...a.points ?? [], { x: bp.x, y: bp.y }, ...z.points ?? []] };
 		if (!m.label && z.label) m.label = z.label;
+		// shortcut: a covering on only one half now covers the whole merged bundle; split it again to fix
+		const cov = [...new Set([...a.coverings ?? [], ...z.coverings ?? []])];
+		if (cov.length) m.coverings = cov; else delete m.coverings;
 		return [m];
 	});
 }

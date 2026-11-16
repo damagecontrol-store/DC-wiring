@@ -1,5 +1,5 @@
 // Groups: named frames around components (devices, regions). Pure, no DOM.
-import { nextId, syncPorts, type Component, type End, type Group, type Harness, type Wire } from "./model.ts";
+import { nextId, removeComponent, syncPorts, type Component, type End, type Group, type Harness, type Wire } from "./model.ts";
 
 export const groupOf = (h: Harness, compId: string) => h.groups?.find(g => g.members.includes(compId));
 export const isLocked = (h: Harness, compId: string) => !!groupOf(h, compId)?.locked;
@@ -62,14 +62,20 @@ export function splitGroup(h: Harness, groupId: string, file: string): Harness {
 		id: nextId(h, "H", h.components), kind: "harness", name: g.name, pins: 0, file, ports: [],
 		x: Math.min(...comps.map(c => c.x)), y: Math.min(...comps.map(c => c.y)), ...g.partId ? { partId: g.partId } : {},
 	};
+	const placed = comps.find(c => c.pos); // keep the block where the group sat on the Layout view
+	if (placed?.pos) block.pos = { ...placed.pos };
 	syncPorts(block, sub);
 	for (const w of crossing) {
 		const e = inner(w);
 		Object.assign(e, { c: block.id, pin: block.ports!.indexOf(`${e.c}:${e.pin}`) + 1 });
 		delete w.points; // drawn for the old connector position
 	}
-	h.components = [...h.components.filter(c => !g.members.includes(c.id)), block];
-	h.wires = h.wires.filter(w => !internal.includes(w));
+	// bundles into the group now end at the block, so the wires to it stay routed and keep their lengths
+	const member = (id: string) => g.members.includes(id);
+	h.bundles = h.bundles?.filter(b => !(member(b.from) && member(b.to)));
+	for (const b of h.bundles ?? []) { if (member(b.from)) b.from = block.id; if (member(b.to)) b.to = block.id; }
+	for (const id of [...g.members]) removeComponent(h, id); // also drops internal wires, mates and group membership
+	h.components.push(block);
 	ungroup(h, g.id);
 	return sub;
 }

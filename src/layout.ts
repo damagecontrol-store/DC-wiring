@@ -1,9 +1,10 @@
 import { Menu } from "obsidian";
+import { labelOf, selComps } from "./components.ts";
 import { nodePos, onLayout, removeBranchPoint, routeWires, spliceSpots, splitBundle } from "./bundles.ts";
 import { formatLength } from "./length.ts";
-import { nextId, type Bundle, type Component, type Harness } from "./model.ts";
+import { nextId, type BranchPoint, type Bundle, type Component, type Harness } from "./model.ts";
 import { insertIndex, labelPoint, type P } from "./route.ts";
-import type { Selection } from "./schematic.ts";
+import { partItem, type Selection } from "./schematic.ts";
 
 const NS = "http://www.w3.org/2000/svg";
 const BW = 120, BH = 28, GRID = 20; // component box on the layout, centred on its position
@@ -19,7 +20,9 @@ export interface LayoutHost {
 	selectLayout(s: LayoutSel): void;
 	changed(): void;
 	editComponent(c: Component): void;
+	pickPart(c: Component): void;
 	editBundle(b: Bundle): void;
+	addCovering(x: Bundle | BranchPoint): void;
 	openSub(c: Component): void;
 }
 
@@ -114,11 +117,13 @@ export class Layout {
 			if (lit.has(b.id)) g.addClass("is-lit");
 			if (lsel?.bundle === b.id) g.addClass("is-selected");
 			const d = "M" + pts.map(p => `${p.x},${p.y}`).join(" L");
+			if (b.coverings?.length) el(g, "path", { d, class: "dcw-sleeve" });
 			el(g, "path", { d, class: "dcw-bline" });
 			el(g, "path", { d, class: "dcw-hit" });
 			const lp = labelPoint(pts);
 			el(g, "text", { x: lp.x, y: lp.y - 8, class: "dcw-blen", "data-blen": b.id },
 				`${b.label ? b.label + " · " : ""}${formatLength(b.length)} · ${n} wire${n === 1 ? "" : "s"}`);
+			if (b.coverings?.length) el(g, "text", { x: lp.x, y: lp.y + 18, class: "dcw-blen" }, this.coverText(b));
 		}
 
 		for (const c of this.comps()) {
@@ -127,7 +132,7 @@ export class Layout {
 			if (c.kind === "harness") g.addClass("is-sub");
 			if (sel?.component === c.id) g.addClass("is-selected");
 			el(g, "rect", { x: p.x - BW / 2, y: p.y - BH / 2, width: BW, height: BH, rx: 4, class: "dcw-body" });
-			el(g, "text", { x: p.x, y: p.y + 4, class: "dcw-label is-center" }, c.kind === "harness" ? `⧉ ${c.name}` : `${c.id}  ${c.name}`);
+			el(g, "text", { x: p.x, y: p.y + 4, class: "dcw-label is-center" }, c.kind === "harness" ? `⧉ ${c.name}` : labelOf(c) ? `${c.id}  ${labelOf(c)}` : c.id);
 			el(g, "circle", { cx: p.x + BW / 2, cy: p.y, r: 5, class: "dcw-pin", "data-node": c.id });
 		}
 
@@ -137,6 +142,7 @@ export class Layout {
 			el(g, "circle", { cx: bp.x, cy: bp.y, r: 10, class: "dcw-splice" }); // ring = drag handle
 			el(g, "circle", { cx: bp.x, cy: bp.y, r: 4, class: "dcw-pin", "data-node": bp.id });
 			el(g, "text", { x: bp.x, y: bp.y - 14, class: "dcw-hint is-center" }, bp.id);
+			if (bp.coverings?.length) el(g, "text", { x: bp.x, y: bp.y + 24, class: "dcw-hint is-center" }, this.coverText(bp));
 		}
 
 		// splices are placed automatically: a marker beside the node they sit at
@@ -148,7 +154,7 @@ export class Layout {
 			const g = el(this.g, "g", { class: "dcw-smark" });
 			if (picked.some(w => w.from.c === s || w.to.c === s) || sel?.component === s) g.addClass("is-lit");
 			el(g, "rect", { x: x - 4, y: y - 4, width: 8, height: 8, transform: `rotate(45 ${x} ${y})` });
-			el(g, "text", { x: x + 8, y: y + 4 }, h.components.find(c => c.id === s)?.name ?? s);
+			el(g, "text", { x: x + 8, y: y + 4 }, (c => c && labelOf(c))(h.components.find(c => c.id === s)) || s);
 		}
 
 		// bend point handles of the selected bundle
@@ -277,6 +283,20 @@ export class Layout {
 		if (c) c.kind === "harness" ? this.host.openSub(c) : this.host.editComponent(c);
 	}
 
+	private coverText(x: Bundle | BranchPoint) {
+		return x.coverings!.map(id => { const p = this.host.h.parts.find(p => p.id === id); return p?.number || p?.coveringType || id; }).join(" + ");
+	}
+
+	/** "Add covering…" plus one "Remove" per covering on a bundle or branch point. */
+	private coverItems(m: Menu, x: Bundle | BranchPoint) {
+		m.addItem(i => i.setTitle("from" in x ? "Add covering…" : "Add covering or boot…").setIcon("package").onClick(() => this.host.addCovering(x)));
+		for (const id of x.coverings ?? []) m.addItem(i => i.setTitle(`Remove ${this.host.h.parts.find(p => p.id === id)?.number || id}`).setIcon("x").onClick(() => {
+			x.coverings = x.coverings!.filter(c => c !== id);
+			if (!x.coverings.length) delete x.coverings;
+			this.host.changed();
+		}));
+	}
+
 	private menu(e: MouseEvent) {
 		e.preventDefault();
 		const t = e.target as Element, h = this.host.h, m = new Menu(), p = this.world(e);
@@ -285,6 +305,7 @@ export class Layout {
 		const c = h.components.find(c => c.id === t.closest("[data-comp]")?.getAttribute("data-comp"));
 		if (b) {
 			m.addItem(i => i.setTitle("Edit bundle").setIcon("pencil").onClick(() => this.host.editBundle(b)));
+			this.coverItems(m, b);
 			m.addItem(i => i.setTitle("Add branch point").setIcon("git-fork").onClick(() => {
 				const id = splitBundle(h, b.id, { x: snap(p.x), y: snap(p.y) });
 				this.host.lsel = id ? { bp: id } : null;
@@ -293,9 +314,12 @@ export class Layout {
 			if (b.points?.length) m.addItem(i => i.setTitle("Clear bend points").setIcon("eraser").onClick(() => { delete b.points; this.host.changed(); }));
 			m.addItem(i => i.setTitle("Delete bundle").setIcon("trash").onClick(() => this.remove({ bundle: b.id })));
 		} else if (bp) {
+			this.coverItems(m, h.branchPoints!.find(x => x.id === bp)!);
 			m.addItem(i => i.setTitle("Delete branch point").setIcon("trash").onClick(() => this.remove({ bp })));
 		} else if (c) {
 			m.addItem(i => i.setTitle("Edit").setIcon("pencil").onClick(() => this.host.editComponent(c)));
+			const many = selComps(this.host.sel);
+			if (c.kind !== "note") partItem(m, h, c, many.includes(c.id) ? h.components.filter(x => many.includes(x.id) && x.kind === c.kind).length : 1, () => this.host.pickPart(c), () => this.host.changed());
 		} else {
 			m.addItem(i => i.setTitle("Add branch point").setIcon("git-fork").onClick(() => this.addBranchPoint(p)));
 			m.addItem(i => i.setTitle("Fit to view").setIcon("maximize").onClick(() => this.fit()));

@@ -13,7 +13,7 @@
             "state": {
               "type": "dc-wiring-harness",
               "state": {
-                "file": "Demo harness.harness"
+                "file": "Demo harness.DC"
               },
               "icon": "cable",
               "title": "Demo harness"
@@ -189,7 +189,14 @@
   },
   "active": "11bed00bfe2c2e9b",
   "lastOpenFiles": [
-    "Engine harness.harness",
-    "Demo harness.harness"
+    "Harness.DC",
+    "Harness Schematic.svg",
+    "Engine harness.DC",
+    "Demo harness.DC",
+    "Harness 2.DC",
+    "Harness.harness",
+    "Harness BOM.csv",
+    "Demo harness.harness",
+    "Engine harness.harness"
   ]
 }
