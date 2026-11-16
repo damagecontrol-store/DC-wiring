@@ -15,6 +15,7 @@ const ctx = await esbuild.context({
   format: "cjs",
   target: "es2020",
   external: ["obsidian", "electron"],
+  loader: { ".png": "dataurl", ".woff2": "dataurl" }, // DC fonts and logo for exported reports
   outfile: `${outdir}/main.js`,
   plugins: [copy],
   logLevel: "info",

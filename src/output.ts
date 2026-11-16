@@ -1,6 +1,7 @@
 // Export menu and commands: writes CSV, SVG and HTML files next to the harness in the vault.
 import { arrayBufferToBase64, Menu, Notice, Platform, TFile } from "obsidian";
 import { bomTable, connectionsTable, csv, cutList, reportHtml, wiringTables } from "./export.ts";
+import { BRAND } from "./brand/brand.ts";
 import { Schematic } from "./schematic.ts";
 import { FormModal, freePath } from "./ui.ts";
 import type { HarnessView } from "./view.ts";
@@ -58,7 +59,7 @@ async function schematicSvg(v: HarnessView): Promise<string> {
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
-const report = async (v: HarnessView) => reportHtml(v.h, { title: v.file?.basename, date: today(), ...v.h.export }, await schematicSvg(v), v.subParts());
+const report = async (v: HarnessView) => reportHtml(v.h, { title: v.file?.basename, date: today(), ...v.h.export }, await schematicSvg(v), v.subParts(), BRAND);
 
 /** Prints the report with the system dialog, which offers "Save as PDF". */
 async function print(v: HarnessView) {
