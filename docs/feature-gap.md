@@ -73,7 +73,7 @@ Our sub-harness "exposed pins" covers part of this; real mates (bulkhead/inline 
 | Feature | Status |
 |---|---|
 | Prefixes C, T, W, CB, TW, S, D, R, B, BP | 🟡 C, S, W, H only |
-| Numbering by canvas position (default) or static, renumber button | 🟡 static only, never reused |
+| Numbering by canvas position (default) or static, renumber button | 🟡 static only, lowest free number reused |
 | Label on every component, used instead of ID everywhere (`ECU (C1)`, `Sensor:C2` when labels clash) | 🟡 connector name, wire name |
 
 ## 6. Parts system (biggest gap after Layout)

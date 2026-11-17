@@ -33,7 +33,7 @@ This guide is for people and AI agents who edit files by hand or generate them. 
   - Lengths are millimetres.
   - Positions are canvas units on a 20-unit grid.
   - Prices are a plain number; `currency` is only the symbol shown.
-- **Ids are unique and never reused or renumbered,** because other files and wires refer to them. Each kind of thing has a prefix:
+- **Ids are unique and never renumbered,** because other files and wires refer to them. A deleted id can be used again by the next new thing of that kind. Each kind of thing has a prefix:
 
   | Prefix | Used for |
   |---|---|
@@ -53,7 +53,7 @@ This guide is for people and AI agents who edit files by hand or generate them. 
   | `BP` | branch point |
   | `TW` | twist group |
 
-- **Making a new id.** Take a number above both the highest existing one and `seq[prefix]`, then set `seq[prefix]` to it.
+- **Making a new id.** Take the lowest number not in use for that prefix, so a deleted id is used again. When you delete something, also remove references to its id (wire ends, group members, bundle ends, mates).
 - **Files that open read-only.** A file the plugin can't draw opens read-only with the reason shown, and nothing is lost. This happens for:
   - a missing id
   - a wire end on a component or pin that doesn't exist
@@ -74,7 +74,7 @@ This guide is for people and AI agents who edit files by hand or generate them. 
 | `voltage` | Supply voltage in V, used for voltage drop percentages. `12` when unset. |
 | `maxDrop` | Allowed voltage drop per wire, in % of `voltage`. `5` when unset. |
 | `hideWireIds` | `true`: don't label unnamed wires with their id on the canvas. |
-| `seq` | Last id number handed out per prefix, e.g. `{ "C": 4, "W": 12 }`. |
+| `seq` | Before 1.3: last id number handed out per prefix. Ignored now, and dropped when the plugin next makes an id. |
 | `export` | Title block of exported drawings: `company`, `title`, `drawing`, `date`, `drawnBy`, `notes`. |
 
 ## Components

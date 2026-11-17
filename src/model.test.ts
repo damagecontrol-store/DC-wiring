@@ -112,12 +112,18 @@ test("wire label prefers the name, can hide ids, and the setting survives parsin
 	assert.equal("hideWireIds" in parseHarness("{}"), false);
 });
 
-test("audit 3: ids are never reused after a delete", () => {
+test("new ids take the lowest free number", () => {
 	const h = sample(); // C1, S1, C2
+	h.seq = { C: 9 }; // counter from an older file: ignored and dropped
 	assert.equal(nextId(h, "C", h.components), "C3");
+	assert.equal(h.seq, undefined);
+	removeComponent(h, "C1");
+	assert.equal(nextId(h, "C", h.components), "C1");
 	removeComponent(h, "C2");
-	assert.equal(nextId(h, "C", h.components), "C4"); // not C2 or C3 again
-	assert.equal(parseHarness(JSON.stringify(h)).seq?.C, 4); // survives save + load
+	assert.deepEqual(h.components.map(c => c.id), ["S1"]);
+	assert.equal(nextId(h, "C", h.components), "C1"); // empty canvas starts again at 1
+	assert.equal(nextId(h, "C", [{ id: "CB1" }, { id: "C1" }]), "C2"); // other prefixes don't count
+	assert.equal(nextId(h, "CB", [{ id: "C1" }]), "CB1");
 });
 
 test("audit 4: unknown top-level fields survive load and save", () => {

@@ -25,7 +25,7 @@
 		"voltage": { "type": "number", "exclusiveMinimum": 0, "description": "Supply voltage in V for voltage drop. 12 when unset." },
 		"maxDrop": { "type": "number", "exclusiveMinimum": 0, "description": "Allowed voltage drop per wire in % of voltage. 5 when unset." },
 		"hideWireIds": { "type": "boolean", "description": "Canvas: don't label unnamed wires with their id." },
-		"seq": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "Last id number handed out per prefix. Ids are never reused." },
+		"seq": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "Before 1.3: last id number handed out per prefix. Ignored, and dropped when the plugin next makes an id." },
 		"export": {
 			"type": "object",
 			"description": "Title block and notes of exported drawings and reports.",

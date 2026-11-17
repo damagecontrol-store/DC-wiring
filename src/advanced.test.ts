@@ -53,7 +53,7 @@ test("twist joins groups, untwist dissolves a group of one", () => {
 	untwist(h, "W1");
 	assert.ok(h.wires.every(w => !w.twist));
 	twist(h, ["W1", "W2"]);
-	assert.equal(h.wires[0].twist, "TW2"); // ids are not reused
+	assert.equal(h.wires[0].twist, "TW1"); // the lowest free id again
 });
 
 test("groups: one group per component, locked inside only, group part is one BOM line, delete cleans up", () => {
