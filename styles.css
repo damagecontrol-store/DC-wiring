@@ -89,6 +89,11 @@
 .dcw-image:hover .dcw-resize { opacity: 1; }
 /* layout view */
 .dcw-wire.is-unrouted .dcw-core, .dcw-wire.is-unrouted .dcw-outline { stroke-dasharray: 8 5; }
+.dcw-wire.has-warning .dcw-outline { stroke: var(--text-warning); stroke-width: 8; }
+.dcw-row.is-warning { fill: rgba(var(--color-orange-rgb), 0.18); }
+.dcw-wlabel.is-warning { fill: var(--text-warning); }
+.dcw-warnmark { fill: var(--text-warning); font-size: 15px; text-anchor: end; cursor: help; }
+.dcw-actions button.dcw-warnbtn { color: var(--text-warning); }
 .dcw-bundle { cursor: pointer; }
 .dcw-bundle path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
 .dcw-bline { stroke: var(--text-muted); stroke-width: 6; }

@@ -12,7 +12,7 @@ import { copyPart, syncStatus } from "./library.ts";
 import { assignPart, effectiveWire, fitsRange, followPart, PART_TYPES, partChoices, partFrom, partSummary, partsUsedBy, pinGauge, setGaugeUnit, type Item } from "./parts.ts";
 import { LibPartPicker, LibraryPicker, PartModal } from "./partview.ts";
 import { GAUGE_UNITS, LENGTH_UNITS, type GaugeUnit, type LengthUnit } from "./units.ts";
-import { dropPercent, validate, voltageDrop } from "./validate.ts";
+import { canvasWarnings, dropPercent, validate, voltageDrop } from "./validate.ts";
 import { cavName, compLabel, designations, labelOf, parseCavities, pasteSignals, selComps, TERMINAL_TYPES } from "./components.ts";
 
 export const VIEW_TYPE = "dc-wiring-harness";
@@ -605,6 +605,8 @@ export class HarnessView extends TextFileView implements Host {
 			actions.createEl("button", { text: "Fit" }).onclick = () => this.schematic.fit();
 			const ids = actions.createEl("button", { text: "Wire IDs", cls: this.h.hideWireIds ? "" : "is-active", attr: { "aria-label": "Show IDs on wires without a name" } });
 			ids.onclick = () => { if (this.h.hideWireIds) delete this.h.hideWireIds; else this.h.hideWireIds = true; this.changed(); };
+			const n = canvasWarnings(this.h).length;
+			if (n) actions.createEl("button", { text: `⚠ ${n}`, cls: "dcw-warnbtn", attr: { "aria-label": "Go to the next warning" } }).onclick = () => this.schematic.nextWarning();
 		} else if (this.tab === "layout") {
 			actions.createEl("button", { text: "+ Branch point" }).onclick = () => this.layout.addBranchPoint();
 			actions.createEl("button", { text: "Fit" }).onclick = () => this.layout.fit();
