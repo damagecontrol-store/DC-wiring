@@ -1,7 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compLabel, copyClip, designations, duplicate, pasteClip, readClip, matches, mateError, moveConnections, netSignals, parseCavities, pasteSignals, resolveTarget } from "./components.ts";
+import { addLibConnector, compLabel, copyClip, designations, duplicate, pasteClip, readClip, matches, mateError, moveConnections, netSignals, parseCavities, pasteSignals, resolveTarget } from "./components.ts";
 import { computeNets, emptyHarness, netWires, parseHarness, removeComponent, signalOf, type Harness } from "./model.ts";
+import { starterLibrary } from "./starter.ts";
 
 function sample(): Harness {
 	const h = emptyHarness();
@@ -170,4 +171,23 @@ test("paste refuses clipboard text that isn't a clip, and a broken clip leaves t
 	const bad = { dcWiring: 1 as const, components: [{ id: "X", kind: "rocket", name: "", x: 0, y: 0, pins: 1 }], wires: [], mates: [], parts: [] };
 	assert.throws(() => pasteClip(h, bad as never, { x: 0, y: 0 }));
 	assert.equal(JSON.stringify(h), before);
+});
+
+test("a library connector arrives with its pins, cavity names, part and accessories", () => {
+	const lib = starterLibrary(), h = emptyHarness();
+	const dt = lib.parts.find(p => p.number === "DT04-4P")!;
+	const id = addLibConnector(h, lib, dt, undefined, 100, 60);
+	const c = h.components.find(c => c.id === id)!;
+	assert.deepEqual([c.kind, c.pins, c.x, c.y, c.cavities], ["connector", 4, 100, 60, ["1", "2", "3", "4"]]);
+	assert.equal(h.parts.find(p => p.id === c.partId)?.number, "DT04-4P");
+	assert.deepEqual(h.parts.map(p => p.number).sort(), ["0460-202-16141", "114017", "DT04-4P", "W4P"]);
+	h.parts.find(p => p.number === "DT04-4P")!.price = 1.5; // the harness's own copy is reused, not overwritten
+	const id2 = addLibConnector(h, lib, dt, undefined, 0, 0);
+	assert.equal(h.components.find(c => c.id === id2)!.partId, c.partId);
+	assert.equal(h.parts.find(p => p.number === "DT04-4P")!.price, 1.5);
+	assert.equal(h.parts.length, 4);
+	const dl = lib.parts.find(p => p.number === "6195-0003")!;
+	const id3 = addLibConnector(h, lib, dl, "0.75–0.85 mm²", 0, 0);
+	assert.equal(h.components.find(c => c.id === id3)!.config, "0.75–0.85 mm²");
+	assert.equal(h.components.find(c => c.id === id3)!.pins, 2);
 });

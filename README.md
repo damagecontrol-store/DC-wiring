@@ -61,7 +61,7 @@ Each harness is a `.DC` file. It opens with four tabs:
 
 1. Install **DC Wiring** from *Settings → Community plugins*.
 2. Run **DC Wiring: New harness** from the command palette, or click the cable icon in the ribbon.
-3. On the Schematic, right-click the empty canvas to add connectors and splices. Drag from one pin to another to draw a wire.
+3. On the Schematic, right-click the empty canvas to add connectors and splices. Drag from one pin to another to draw a wire. When the harness's folder holds a part library (`.DClib`), **+ Connector** lets you pick a housing from it, and the connector arrives with its cavities and part assigned.
 4. Open the **Parts** tab, click **+ Part**, then right-click a component or wire → **Assign part**.
 5. Use **Export** in the toolbar for the parts list, wiring list or a printable report.
 
