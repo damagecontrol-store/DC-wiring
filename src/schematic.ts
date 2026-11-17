@@ -1,11 +1,12 @@
 import { Menu, Notice } from "obsidian";
-import { cavName, compLabel, duplicate, labelOf, matches, mateError, moveConnections, netSignals, PREFIX, resolveTarget, selComps } from "./components.ts";
+import { cavName, compLabel, copyClip, duplicate, pasteClip, readClip, labelOf, matches, mateError, moveConnections, netSignals, PREFIX, resolveTarget, selComps } from "./components.ts";
 import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, wireLabel, type Component, type End, type Harness, type Wire } from "./model.ts";
 import { routeWires } from "./bundles.ts";
 import { formatLength } from "./length.ts";
 import { effectiveWire, loadedParts } from "./parts.ts";
 import { insertIndex, labelPoint, orthoPoints, roundedPath, routeAround, separate, STUB, type P, type Rect } from "./route.ts";
 import { wireColors } from "./ui.ts";
+import { canvasWarnings } from "./validate.ts";
 import { drawWiringTables, wiringTableItem } from "./wiringtable.ts";
 import { coreOf, twist, untwist } from "./cable.ts";
 import { groupOf, isLocked, moveGroup, ungroup, wireLocked } from "./groups.ts";
@@ -140,9 +141,10 @@ export class Schematic {
 	key(e: KeyboardEvent): boolean {
 		const k = e.key.toLowerCase(), ids = selComps(this.host.sel), h = this.host.h;
 		if (e.metaKey || e.ctrlKey) {
-			if (k !== "d") return false;
-			const copies = duplicate(h, ids);
-			if (copies.length) { this.host.sel = copies.length > 1 ? { components: copies } : { component: copies[0] }; this.host.changed(); }
+			if (k === "d") this.duplicateSelection();
+			else if (k === "c" && ids.length) void this.copy();
+			else if (k === "v") void this.paste();
+			else return false;
 			return true;
 		}
 		if (e.altKey) return false;
@@ -155,16 +157,43 @@ export class Schematic {
 		else if (k === "n") this.toggle("net");
 		else if (k === "i") this.toggle("ids");
 		else if (k === "d") this.toggle("dest");
-		else if (k === " ") {
-			this.search.removeClass("is-hidden");
-			const input = this.search.querySelector("input")!;
-			input.focus();
-			input.select();
-		} else return false;
+		else if (k === " ") this.openSearch();
+		else return false;
 		return true;
 	}
 
-	private toggle(k: "net" | "ids" | "dest") {
+	openSearch() {
+		this.search.removeClass("is-hidden");
+		const input = this.search.querySelector("input")!;
+		input.focus();
+		input.select();
+	}
+
+	duplicateSelection() {
+		const copies = duplicate(this.host.h, selComps(this.host.sel));
+		if (copies.length) { this.host.sel = copies.length > 1 ? { components: copies } : { component: copies[0] }; this.host.changed(); }
+	}
+
+	/** Puts the selected components, the wires between them and their parts on the clipboard. */
+	async copy() {
+		const ids = selComps(this.host.sel);
+		if (!ids.length) return void new Notice("DC Wiring: select components to copy.");
+		await navigator.clipboard.writeText(JSON.stringify(copyClip(this.host.h, ids)));
+		new Notice(`DC Wiring: copied ${ids.length} component${ids.length > 1 ? "s" : ""}.`);
+	}
+
+	/** Pastes copied components into the middle of the view, with new ids. Parts with the same number are shared, not added twice. */
+	async paste() {
+		const clip = readClip(await navigator.clipboard.readText());
+		if (!clip) return void new Notice("DC Wiring: the clipboard holds no copied components.");
+		let ids: string[];
+		try { ids = pasteClip(this.host.h, clip, this.center()); }
+		catch (e) { return void new Notice(`DC Wiring: can't paste (${(e as Error).message}).`); }
+		this.host.sel = ids.length > 1 ? { components: ids } : ids.length ? { component: ids[0] } : null;
+		this.host.changed();
+	}
+
+	toggle(k: "net" | "ids" | "dest") {
 		this.opts[k] = !this.opts[k];
 		this.render();
 	}
@@ -187,11 +216,25 @@ export class Schematic {
 		if (!this.results.childElementCount) this.results.createDiv({ cls: "dcw-hint", text: "No matches" });
 	}
 
-	private centerOn(c: Component) {
-		const e = this.extent(c), r = this.svg.getBoundingClientRect();
-		this.view.x = r.width / 2 - (e.x1 + e.x2) / 2 * this.view.z;
-		this.view.y = r.height / 2 - (e.y1 + e.y2) / 2 * this.view.z;
+	private centerOn(...cs: Component[]) {
+		const ex = cs.map(c => this.extent(c)), r = this.svg.getBoundingClientRect();
+		const x = (Math.min(...ex.map(e => e.x1)) + Math.max(...ex.map(e => e.x2))) / 2, y = (Math.min(...ex.map(e => e.y1)) + Math.max(...ex.map(e => e.y2))) / 2;
+		this.view.x = r.width / 2 - x * this.view.z;
+		this.view.y = r.height / 2 - y * this.view.z;
 		this.applyView();
+	}
+
+	private warnAt = -1; // which warning "next warning" showed last
+	/** Selects the next warning on the canvas, centres on it and says what it is. */
+	nextWarning() {
+		const h = this.host.h, ws = canvasWarnings(h);
+		if (!ws.length) return;
+		const x = ws[this.warnAt = (this.warnAt + 1) % ws.length];
+		const w = x.kind === "wire" ? h.wires.find(w => w.id === x.id) : undefined;
+		const cs = h.components.filter(c => w ? c.id === w.from.c || c.id === w.to.c : c.id === x.id);
+		this.host.select(w ? { wires: [w.id] } : { component: x.id });
+		if (cs.length) this.centerOn(...cs);
+		new Notice(`${x.id}: ${x.message}`);
 	}
 
 	/** Header / label text: the label, with the id in front when IDs are shown. */
@@ -246,6 +289,7 @@ export class Schematic {
 			: new Set(h.wires.filter(w => sel.wires?.includes(w.id) || comps.includes(w.from.c) || comps.includes(w.to.c)).map(w => w.id));
 		const nets = computeNets(h);
 		const routes = h.bundles?.length ? routeWires(h) : null;
+		const warns = canvasWarnings(h);
 		this.renderOverlay();
 
 		for (const m of h.mates ?? []) {
@@ -278,13 +322,15 @@ export class Schematic {
 		}
 
 		// wire labels: placed apart so side-by-side wires don't print on top of each other, drawn after every wire so none crosses them
-		const labels: { x: number; y: number; text: string; dim: boolean }[] = [];
+		const labels: { x: number; y: number; text: string; dim: boolean; warn: boolean }[] = [];
 		for (const { w, a, b, offset } of routed) {
 			const pts = orthoPoints(a, b, w.points, offset);
 			const d = roundedPath(pts);
 			const g = el(this.g, "g", { class: "dcw-wire", "data-wire": w.id });
 			if (lit && !lit.has(w.id)) g.addClass("is-dim");
 			if (routes && !routes.has(w.id)) g.addClass("is-unrouted"); // has a layout, but no bundle path
+			const ww = warns.filter(x => x.kind === "wire" && x.id === w.id);
+			if (ww.length) { g.addClass("has-warning"); el(g, "title", {}, ww.map(x => x.message).join("\n")); }
 			if (sel?.wires?.includes(w.id)) el(g, "path", { d, class: "dcw-glow" });
 			const [base, stripe] = wireColors(effectiveWire(h, w).color);
 			el(g, "path", { d, class: "dcw-outline" });
@@ -292,17 +338,17 @@ export class Schematic {
 			if (stripe) el(g, "path", { d, class: "dcw-stripe", stroke: stripe });
 			el(g, "path", { d, class: "dcw-hit" });
 			const lp = labelPoint(pts);
-			const label = wireLabel(h, w);
+			const label = [ww.length ? "⚠" : "", wireLabel(h, w)].filter(Boolean).join(" "); // a halo alone is lost on red wires
 			if (label) {
 				let y = lp.y - 5;
 				while (labels.some(q => Math.abs(q.x - lp.x) < 40 && Math.abs(q.y - y) < 11)) y += 12;
-				labels.push({ x: lp.x, y, text: label, dim: !!lit && !lit.has(w.id) });
+				labels.push({ x: lp.x, y, text: label, dim: !!lit && !lit.has(w.id), warn: ww.length > 0 });
 			}
 			// shortcut: ident and twist marks sit level at the label point, also on vertical runs; follow the path if that reads badly
 			if (w.ident) this.ident(g, lp, w.ident);
 			if (w.twist) for (const s of [-1, 1]) el(g, "path", { d: `M${lp.x - 12},${lp.y + 12} q3,${s * 5} 6,0 t6,0 t6,0 t6,0`, class: "dcw-twist" });
 		}
-		for (const l of labels) el(this.g, "text", { x: l.x, y: l.y, class: "dcw-wlabel" + (l.dim ? " is-dim" : "") }, l.text);
+		for (const l of labels) el(this.g, "text", { x: l.x, y: l.y, class: "dcw-wlabel" + (l.dim ? " is-dim" : "") + (l.warn ? " is-warning" : "") }, l.text);
 
 		for (const c of h.components) {
 			const g = el(this.g, "g", { class: "dcw-comp", "data-comp": c.id });
@@ -331,7 +377,7 @@ export class Schematic {
 			for (let p = 1; p <= c.pins; p++) {
 				const y = c.y + HDR + (p - 1) * ROW;
 				el(g, "line", { x1: c.x, y1: y, x2: c.x + W, y2: y, class: "dcw-sep" });
-				el(g, "rect", { x: c.x, y, width: W, height: ROW, class: "dcw-row", "data-row": p });
+				el(g, "rect", { x: c.x, y, width: W, height: ROW, class: warns.some(x => x.id === c.id && x.pin === p) ? "dcw-row is-warning" : "dcw-row", "data-row": p });
 				if (c.kind === "harness") {
 					const ref = c.ports?.[p - 1] ?? "", label = sub && portLabel(sub, ref);
 					const full = label || `${ref}${sub ? " (missing)" : ""}`;
@@ -351,6 +397,12 @@ export class Schematic {
 			}
 			if (part) el(g, "text", { x: c.x, y: c.y + hgt + 14, class: "dcw-part" }, `${part.number}${part.manufacturer ? " · " + part.manufacturer : ""}`);
 			if (c.layout) this.face(g, c, faceTop(c, !!part), lit);
+		}
+		for (const c of h.components) {
+			const cw = warns.filter(x => x.kind === "component" && x.id === c.id);
+			if (!cw.length) continue;
+			const e = this.extent(c);
+			el(el(this.g, "text", { x: e.x2 - 4, y: e.y1 + 14, class: "dcw-warnmark" }, "⚠"), "title", {}, cw.map(x => x.message).join("\n"));
 		}
 		drawWiringTables(this.g, this.host);
 		// bend point handles of the selected wire, on top of everything

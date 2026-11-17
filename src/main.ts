@@ -1,8 +1,22 @@
 import { Platform, Plugin, TFile, TFolder } from "obsidian";
 import { emptyHarness, parseHarness, relinkSub, isHarnessExt } from "./model.ts";
 import { EXPORTS } from "./output.ts";
-import { freePath } from "./ui.ts";
+import type { Schematic } from "./schematic.ts";
+import { freePath, showShortcuts } from "./ui.ts";
 import { HarnessView, VIEW_TYPE } from "./view.ts";
+
+// Schematic keys as commands too: they show in the command palette and can get their own hotkeys
+const SCHEMATIC: [string, string, (s: Schematic) => unknown][] = [
+	["search", "Search components (Space)", s => s.openSearch()],
+	["fit", "Fit schematic to view (F)", s => s.fit()],
+	["toggle-net", "Toggle whole-net highlight (N)", s => s.toggle("net")],
+	["toggle-ids", "Toggle component IDs (I)", s => s.toggle("ids")],
+	["toggle-destinations", "Toggle destinations: type where each cavity goes (D)", s => s.toggle("dest")],
+	["duplicate", "Duplicate selected components", s => s.duplicateSelection()],
+	["copy", "Copy selected components", s => s.copy()],
+	["paste", "Paste components", s => s.paste()],
+	["next-warning", "Go to the next warning", s => s.nextWarning()],
+];
 
 export default class DCWiringPlugin extends Plugin {
 	async onload() {
@@ -26,6 +40,14 @@ export default class DCWiringPlugin extends Plugin {
 				void leaf.openFile(file).then(() => (leaf.view as HarnessView).showTab("layout"));
 			},
 		});
+		for (const [id, name, run] of SCHEMATIC) this.addCommand({ id, name, checkCallback: checking =>
+			this.app.workspace.getActiveViewOfType(HarnessView)?.schematicAction(run, checking) ?? false });
+		this.addCommand({ id: "show-shortcuts", name: "Show keyboard and mouse shortcuts", callback: () => showShortcuts(this.app) });
+		this.addCommand({ id: "edit-title-block", name: "Harness settings: units, voltage drop, title block", checkCallback: checking => { // id kept so existing hotkeys survive
+			const v = this.app.workspace.getActiveViewOfType(HarnessView);
+			if (v && !checking) v.editSettings();
+			return !!v;
+		} });
 		this.addCommand({ id: "new-part-library", name: "New part library", callback: () => this.create(undefined, "DClib") });
 		// only in a harness, not in a library: a library has nothing to add from or to
 		const inHarness = (run: (v: HarnessView) => void) => (checking: boolean) => {

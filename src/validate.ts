@@ -15,6 +15,9 @@ export function voltageDrop(h: Harness, w: Wire, routes = routeWires(h)): number
 	return w.current * COPPER * m / mm2;
 }
 
+/** Warnings drawn on the Schematic: wire and component ones. "No part" is left out, or every new wire would light up. */
+export const canvasWarnings = (h: Harness) => validate(h).filter(w => w.kind !== "part" && w.message !== "No part");
+
 /** Drop as a percentage of the harness supply voltage. */
 export const dropPercent = (h: Harness, v: number) => 100 * v / (h.voltage || 12);
 

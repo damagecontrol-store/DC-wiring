@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { emptyHarness } from "./model.ts";
-import { dropPercent, validate, voltageDrop } from "./validate.ts";
+import { canvasWarnings, dropPercent, validate, voltageDrop } from "./validate.ts";
 
 function feed() {
 	const h = emptyHarness();
@@ -35,4 +35,12 @@ test("warns about current over the part rating and drop over the limit", () => {
 	assert.deepEqual(wireMsgs(h), []);
 	h.maxDrop = 3;
 	assert.deepEqual(wireMsgs(h), ["0.79 V drop (3.3 %), over the 3 % limit"]);
+});
+
+test("the canvas shows wire and component warnings, but not missing parts or part problems", () => {
+	const h = feed();
+	h.wires.push({ id: "W2", from: { c: "C1", pin: 1 }, to: { c: "C2", pin: 1 }, color: "bk", gauge: "1", length: 100 }); // no part
+	h.parts.push({ id: "P2", number: "", manufacturer: "", description: "", price: 0 }); // not used
+	assert.deepEqual(canvasWarnings(h).map(w => w.id), ["W1", "W1"]);
+	assert.ok(validate(h).some(w => w.id === "W2" && w.message === "No part"));
 });

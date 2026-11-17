@@ -3,7 +3,7 @@ import { arrayBufferToBase64, Menu, Notice, Platform, TFile } from "obsidian";
 import { bomTable, connectionsTable, csv, cutList, reportHtml, wiringTables } from "./export.ts";
 import { BRAND } from "./brand/brand.ts";
 import { Schematic } from "./schematic.ts";
-import { FormModal, freePath } from "./ui.ts";
+import { freePath } from "./ui.ts";
 import type { HarnessView } from "./view.ts";
 
 
@@ -72,22 +72,6 @@ async function print(v: HarnessView) {
 	f.srcdoc = html;
 }
 
-function editTitleBlock(v: HarnessView) {
-	const t = v.h.export ?? {};
-	new FormModal(v.app, "Title block and notes", [
-		{ key: "company", label: "Company", value: t.company ?? "" },
-		{ key: "title", label: "Title (empty: file name)", value: t.title ?? "" },
-		{ key: "drawing", label: "Drawing number", value: t.drawing ?? "" },
-		{ key: "date", label: "Date (empty: today)", value: t.date ?? "" },
-		{ key: "drawnBy", label: "Drawn by", value: t.drawnBy ?? "" },
-		{ key: "notes", label: "Notes", value: t.notes ?? "" },
-	], vals => {
-		const kept = Object.fromEntries(Object.entries(vals).map(([k, s]) => [k, s.trim()]).filter(([, s]) => s));
-		if (Object.keys(kept).length) v.h.export = kept; else delete v.h.export;
-		v.changed();
-	}).open();
-}
-
 export const EXPORTS: { id: string; name: string; run: (v: HarnessView) => unknown; desktop?: boolean }[] = [
 	{ id: "export-bom", name: "Export BOM (CSV)", run: v => save(v, "BOM", "csv", csv(bomTable(v.h, v.subParts()))) },
 	{ id: "export-connections", name: "Export connections (CSV)", run: v => save(v, "Connections", "csv", csv(connectionsTable(v.h))) },
@@ -96,7 +80,6 @@ export const EXPORTS: { id: string; name: string; run: (v: HarnessView) => unkno
 	{ id: "export-schematic-svg", name: "Export schematic (SVG)", run: async v => save(v, "Schematic", "svg", await schematicSvg(v)) },
 	{ id: "export-report", name: "Export report (HTML)", run: async v => save(v, "Report", "html", await report(v)) },
 	{ id: "print-report", name: "Print report / save as PDF", run: print, desktop: true },
-	{ id: "edit-title-block", name: "Edit title block and notes", run: editTitleBlock },
 ];
 
 export function exportMenu(v: HarnessView, e: MouseEvent) {

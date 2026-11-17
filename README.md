@@ -34,6 +34,8 @@ Each harness is a `.DC` file. It opens with four tabs:
 - Splices, terminals, cables with cores and a shield, twisted wires, diodes and resistors. Nets stop at diodes and resistors.
 - Typed wiring: select a connector and type where each cavity goes.
 - Undo and redo, search, multi-select, groups, mated connectors and images.
+- Copy and paste components with their wires and parts, also from one harness into another.
+- Problems show on the canvas: a ⚠ on the component or wire, and a ⚠ button that steps through them.
 
 **Sub-harnesses.** Use another `.DC` file as a block in this one. Its parts are added to this harness's parts list, and links survive renames.
 
@@ -69,7 +71,9 @@ Each harness is a `.DC` file. It opens with four tabs:
 - Open layout beside schematic
 - Add all harness parts to a part library / Add a part from a part library
 - Export BOM, connections, wiring tables or cut list (CSV), schematic (SVG), report (HTML), or print the report as PDF
-- Edit title block and notes
+- Harness settings: units, voltage drop limit and title block (also the **Settings** button)
+- Schematic actions: search, fit, net highlight, IDs, destinations, duplicate, copy, paste, next warning. Give them your own hotkeys under *Settings → Hotkeys*.
+- Show keyboard and mouse shortcuts (or press **?** in a harness)
 
 ## The file format
 
