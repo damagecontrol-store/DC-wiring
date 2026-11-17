@@ -140,7 +140,7 @@ export interface Harness {
 	hideWireIds?: boolean; // canvas: don't label unnamed wires with their id
 	bundles?: Bundle[];
 	branchPoints?: BranchPoint[];
-	seq?: Record<string, number>; // last id number handed out per prefix, so deleted ids are never reused
+	seq?: Record<string, number>; // before 1.3: last id number handed out per prefix. Ignored, dropped on the next new id
 	export?: { company?: string; title?: string; drawing?: string; date?: string; drawnBy?: string; notes?: string }; // title block and notes of exported drawings
 	groups?: Group[];
 	images?: CanvasImage[];
@@ -203,13 +203,14 @@ export const formatPins = (c: Component) => c.layout ? `${c.layout.rows}x${c.lay
 export const pinKey =(e: End) => `${e.c}:${e.pin}`;
 
 /**
- * Next id with the given prefix: C1, C2, ... Never hands out a number twice, even after a delete:
- * sub-harness blocks in other files refer to connectors by id.
+ * Next id with the given prefix: the lowest free number, so a deleted id is used again (an empty canvas starts at C1).
+ * Deletes clean up references inside the file; a parent harness that pointed at a deleted connector can't tell.
  */
 export function nextId(h: Harness, prefix: string, used: { id: string }[]): string {
-	const nums = used.map(u => u.id.startsWith(prefix) ? Number(u.id.slice(prefix.length)) : 0);
-	const n = Math.max(h.seq?.[prefix] ?? 0, ...nums.filter(n => !isNaN(n))) + 1;
-	h.seq = { ...h.seq, [prefix]: n };
+	delete h.seq; // counter from files before 1.3, no longer used
+	const taken = new Set(used.map(u => u.id));
+	let n = 1;
+	while (taken.has(prefix + n)) n++;
 	return prefix + n;
 }
 

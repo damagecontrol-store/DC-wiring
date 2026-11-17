@@ -57,7 +57,7 @@ export function splitGroup(h: Harness, groupId: string, file: string): Harness {
 	}
 	for (const w of crossing) comps.find(c => c.id === inner(w).c)!.exposed = true;
 	const used = new Set([...comps, ...internal].map(x => x.partId));
-	const sub: Harness = { version: 1, components: comps, wires: internal, parts: h.parts.filter(p => used.has(p.id)).map(p => ({ ...p })), seq: { ...h.seq } };
+	const sub: Harness = { version: 1, components: comps, wires: internal, parts: h.parts.filter(p => used.has(p.id)).map(p => ({ ...p })) };
 	const block: Component = {
 		id: nextId(h, "H", h.components), kind: "harness", name: g.name, pins: 0, file, ports: [],
 		x: Math.min(...comps.map(c => c.x)), y: Math.min(...comps.map(c => c.y)), ...g.partId ? { partId: g.partId } : {},
