@@ -1,8 +1,22 @@
 // Design checks shown as warnings. Pure: no Obsidian imports, so tests can load it.
 
-import { bom, type Harness } from "./model.ts";
-import { configOf, fitsRange, loadedParts, pinGauge } from "./parts.ts";
-import { formatGauge } from "./units.ts";
+import { routeWires, wireLength } from "./bundles.ts";
+import { bom, type Harness, type Wire } from "./model.ts";
+import { configOf, effectiveWire, fitsRange, loadedParts, pinGauge } from "./parts.ts";
+import { formatGauge, toMm2 } from "./units.ts";
+
+// shortcut: copper at 20 °C; a hot wire (~80 °C) has ~25 % more resistance, add a temperature setting if that matters
+const COPPER = 0.0175; // Ω·mm²/m
+
+/** Voltage drop over the wire itself in V, or undefined without a current, gauge or length. The return path is its own wire (or chassis). */
+export function voltageDrop(h: Harness, w: Wire, routes = routeWires(h)): number | undefined {
+	const mm2 = toMm2(effectiveWire(h, w).gauge, h.gaugeUnit), m = wireLength(h, w, routes) / 1000;
+	if (!w.current || !mm2 || !m) return;
+	return w.current * COPPER * m / mm2;
+}
+
+/** Drop as a percentage of the harness supply voltage. */
+export const dropPercent = (h: Harness, v: number) => 100 * v / (h.voltage || 12);
 
 export interface Warning { kind: "component" | "wire" | "part"; id: string; pin?: number; message: string }
 
@@ -32,7 +46,15 @@ export function validate(h: Harness): Warning[] {
 				: `pin ${pin}: ${formatGauge(g, h.gaugeUnit ?? "mm²")} fits no contact in configuration "${cf!.name}"` });
 		}
 	}
-	for (const w of h.wires) if (!part(w.partId)) out.push({ kind: "wire", id: w.id, message: "No part" });
+	const routes = routeWires(h), limit = h.maxDrop ?? 5;
+	for (const w of h.wires) {
+		if (!part(w.partId)) out.push({ kind: "wire", id: w.id, message: "No part" });
+		const max = part(w.partId)?.ampacity;
+		if (w.current && max && w.current > max) out.push({ kind: "wire", id: w.id, message: `${w.current} A is over the part's ${max} A rating` });
+		const v = voltageDrop(h, w, routes);
+		if (v !== undefined && dropPercent(h, v) > limit)
+			out.push({ kind: "wire", id: w.id, message: `${v.toFixed(2)} V drop (${dropPercent(h, v).toFixed(1)} %), over the ${limit} % limit` });
+	}
 	const seen = new Map<string, number>();
 	for (const p of h.parts) if (p.number) seen.set(p.number, (seen.get(p.number) ?? 0) + 1);
 	for (const r of bom(h)) {

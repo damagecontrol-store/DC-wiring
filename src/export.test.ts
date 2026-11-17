@@ -38,7 +38,7 @@ test("BOM table has own parts, sub-harness roll-up and a total", () => {
 
 test("connections list both ends with signals", () => {
 	const t = connectionsTable(sample());
-	assert.deepEqual(t[2], ["W2", "LAMP+", "S1 : 1", "VCC", "Lamp, rear : 1", "VCC", "red", "1", 250, "FLRY 1.0"]);
+	assert.deepEqual(t[2], ["W2", "LAMP+", "S1 : 1", "VCC", "Lamp, rear : 1", "VCC", "red", "1", 250, undefined, undefined, "FLRY 1.0"]);
 	assert.equal(t[3][4], "Door › C4:1");
 });
 

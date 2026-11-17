@@ -12,7 +12,7 @@ import { copyPart, syncStatus } from "./library.ts";
 import { assignPart, effectiveWire, fitsRange, followPart, PART_TYPES, partChoices, partFrom, partSummary, partsUsedBy, pinGauge, setGaugeUnit, type Item } from "./parts.ts";
 import { LibPartPicker, LibraryPicker, PartModal } from "./partview.ts";
 import { GAUGE_UNITS, LENGTH_UNITS, type GaugeUnit, type LengthUnit } from "./units.ts";
-import { validate } from "./validate.ts";
+import { dropPercent, validate, voltageDrop } from "./validate.ts";
 import { cavName, compLabel, designations, labelOf, parseCavities, pasteSignals, selComps, TERMINAL_TYPES } from "./components.ts";
 
 export const VIEW_TYPE = "dc-wiring-harness";
@@ -446,10 +446,15 @@ export class HarnessView extends TextFileView implements Host {
 	private editUnits() {
 		new FormModal(this.app, "Units", [
 			{ key: "currency", label: "Currency symbol", value: this.h.currency ?? "" },
+			{ key: "voltage", label: "Supply voltage (V), for voltage drop", value: String(this.h.voltage ?? 12) },
+			{ key: "maxDrop", label: "Allowed voltage drop per wire (%)", value: String(this.h.maxDrop ?? 5) },
 			{ key: "length", label: "Default length unit", value: this.h.lengthUnit ?? "mm", options: Object.fromEntries(Object.keys(LENGTH_UNITS).map(u => [u, u])) },
 			{ key: "gauge", label: "Default gauge unit", value: this.h.gaugeUnit ?? "mm²", options: Object.fromEntries(GAUGE_UNITS.map(u => [u, u])) },
 		], v => {
 			if (v.currency.trim()) this.h.currency = v.currency.trim(); else delete this.h.currency;
+			const volts = Number(v.voltage), drop = Number(v.maxDrop); // defaults are left out of the file
+			if (volts > 0 && volts !== 12) this.h.voltage = volts; else delete this.h.voltage;
+			if (drop > 0 && drop !== 5) this.h.maxDrop = drop; else delete this.h.maxDrop;
 			if (v.length === "mm") delete this.h.lengthUnit; else this.h.lengthUnit = v.length as LengthUnit;
 			setGaugeUnit(this.h, v.gauge as GaugeUnit);
 			this.changed();
@@ -492,6 +497,7 @@ export class HarnessView extends TextFileView implements Host {
 			{ key: "color", label: "Colour (e.g. red, rd/wh, sw/ge)", value: w.color },
 			{ key: "gauge", label: "Gauge (mm² or AWG)", value: w.gauge },
 			{ key: "length", label: "Length (mm)", value: String(w.length || "") },
+			{ key: "current", label: "Current (A), for voltage drop", value: String(w.current ?? "") },
 			this.partField(w.partId),
 			{ key: "identLabel", label: "Ident label (printed on the wire)", value: w.ident?.label ?? "" },
 			{ key: "identColors", label: "Ident colour bands, comma separated (e.g. rd, gn)", value: (w.ident?.colors ?? []).join(", ") },
@@ -502,6 +508,7 @@ export class HarnessView extends TextFileView implements Host {
 			w.color = v.color.trim() || w.color;
 			w.gauge = v.gauge.trim();
 			w.length = Math.max(0, Number(v.length) || 0);
+			if (Number(v.current) > 0) w.current = Number(v.current); else delete w.current;
 			w.partId = v.partId || undefined;
 			this.changed();
 		}).open();
@@ -637,7 +644,7 @@ export class HarnessView extends TextFileView implements Host {
 		if (general.length) this.body.createDiv({ cls: "dcw-warnings", text: "⚠ " + general.map(w => `${w.id}: ${w.message}`).join(" · ") });
 		const table = this.body.createEl("table", { cls: "dcw-table" });
 		const head = table.createEl("tr");
-		for (const t of ["ID", "Name", "From", "To", "Signal", "Colour", "Gauge", "Length (mm)", "Part", "Twisted with", "Warnings", ""]) head.createEl("th", { text: t });
+		for (const t of ["ID", "Name", "From", "To", "Signal", "Colour", "Gauge", "Length (mm)", "Current (A)", "Drop", "Part", "Twisted with", "Warnings", ""]) head.createEl("th", { text: t });
 		const routes = routeWires(this.h);
 		for (const w of this.h.wires) {
 			const tr = table.createEl("tr", { cls: this.sel?.wires?.includes(w.id) ? "is-selected" : "" });
@@ -660,6 +667,10 @@ export class HarnessView extends TextFileView implements Host {
 					this.changed();
 				};
 			}
+			const amps = tr.createEl("td").createEl("input", { value: String(w.current ?? ""), type: "number", attr: { min: "0", step: "any" } });
+			amps.onchange = () => { const a = Number(amps.value); if (a > 0) w.current = a; else delete w.current; this.changed(); };
+			const v = voltageDrop(this.h, w, routes);
+			tr.createEl("td", { cls: "dcw-nowrap", text: v === undefined ? "" : `${v.toFixed(2)} V (${dropPercent(this.h, v).toFixed(1)} %)` });
 			this.partSelect(tr.createEl("td"), w.partId, id => { w.partId = id; this.changed(); });
 			tr.createEl("td", { text: twistedWith(this.h, w.id).join(", ") });
 			tr.createEl("td", { cls: "dcw-warn", text: warnings.filter(x => x.kind === "wire" ? x.id === w.id
@@ -675,13 +686,13 @@ export class HarnessView extends TextFileView implements Host {
 		// each cable core is a conductor too: its ends are the wires landing on it
 		for (const c of this.h.components) {
 			if (c.kind !== "cable") continue;
-			table.createEl("tr", { cls: "dcw-section" }).createEl("td", { text: `Cable ${c.id} ${c.name}`, attr: { colspan: 11 } });
+			table.createEl("tr", { cls: "dcw-section" }).createEl("td", { text: `Cable ${c.id} ${c.name}`, attr: { colspan: 13 } });
 			for (const pin of [...(c.cores ?? []).keys()].map(i => i + 1).concat(c.shield ? [0] : [])) {
 				const ends = this.h.wires.flatMap(w => w.from.c === c.id && w.from.pin === pin ? [w.to] : w.to.c === c.id && w.to.pin === pin ? [w.from] : []);
 				const core = c.cores?.[pin - 1];
 				const tr = table.createEl("tr", { cls: "dcw-readonly" });
 				for (const t of [coreName(c, pin), "", ends[0] ? end(ends[0]) : "", ends.slice(1).map(end).join(", "),
-					signalOf(this.h, { c: c.id, pin }) ?? "", core?.color ?? "shield", core?.gauge ?? "", String(c.length || ""), this.h.parts.find(p => p.id === c.partId)?.number ?? "", "", ""]) tr.createEl("td", { text: t });
+					signalOf(this.h, { c: c.id, pin }) ?? "", core?.color ?? "shield", core?.gauge ?? "", String(c.length || ""), "", "", this.h.parts.find(p => p.id === c.partId)?.number ?? "", "", ""]) tr.createEl("td", { text: t });
 			}
 		}
 		if (!this.h.wires.length) this.body.createDiv({ cls: "dcw-empty", text: "No wires yet. Drag from one pin to another on the Schematic." });

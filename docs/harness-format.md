@@ -71,6 +71,8 @@ This guide is for people and AI agents who edit files by hand or generate them. 
 | `currency` | Symbol shown with prices, e.g. `"€"`. |
 | `lengthUnit` | Unit lengths are shown in: `mm`, `cm`, `m`, `in`, `ft`, `yd`. Stored values stay in mm. |
 | `gaugeUnit` | Unit of gauges typed as a plain number: `mm²` (default), `AWG`, `cmil`, `kcmil`. |
+| `voltage` | Supply voltage in V, used for voltage drop percentages. `12` when unset. |
+| `maxDrop` | Allowed voltage drop per wire, in % of `voltage`. `5` when unset. |
 | `hideWireIds` | `true`: don't label unnamed wires with their id on the canvas. |
 | `seq` | Last id number handed out per prefix, e.g. `{ "C": 4, "W": 12 }`. |
 | `export` | Title block of exported drawings: `company`, `title`, `drawing`, `date`, `drawnBy`, `notes`. |
@@ -133,6 +135,7 @@ Other optional fields:
 | `points` | Schematic bend points `[{x, y}, …]` from `from` to `to`. Leave them out to route the wire automatically. |
 | `twist` | Twist group id (`TW1`): wires with the same value are twisted together. |
 | `ident` | Marking printed on the wire: `{ "label": "…", "colors": ["…"] }`. |
+| `current` | Current the wire carries, in A. With a gauge and a length it gives the voltage drop: current × 0.0175 Ω·mm²/m (copper at 20 °C) × length ÷ cross-section, over this wire only. |
 
 ## Cables
 
@@ -172,7 +175,7 @@ A cable component (`kind: "cable"`) has these fields:
 | `type` | Fields |
 |---|---|
 | `connector` | `cavities`; `designations` (one per cavity; connectors with that many pins take them); `gender` (`male` or `female`); `shell` |
-| `wire` | `gauge`, `stripe`, `insulation` (mm), `diameter` (mm) |
+| `wire` | `gauge`, `stripe`, `insulation` (mm), `diameter` (mm), `ampacity` (max current in A, from the datasheet) |
 | `cable` | `coreList` (`[{color, gauge}]`; cables using the part take these cores), `cores` (count), `shield`, `diameter` |
 | `terminal` | `terminalType` (`ring`, `spade`, `quick-connect`, `ferrule`, `other`), `size`, `gaugeMin`, `gaugeMax` |
 | `contact` | `contactType` (`crimp`, `solder`, `other`), `gender` (`pin` or `socket`), `gaugeMin`, `gaugeMax` |

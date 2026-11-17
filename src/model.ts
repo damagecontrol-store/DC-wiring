@@ -60,6 +60,7 @@ export interface Wire {
 	points?: { x: number; y: number }[]; // schematic bend points, in order from -> to
 	twist?: string; // wires with the same id are twisted together
 	ident?: { label?: string; colors?: string[] }; // marking printed on the wire
+	current?: number; // A the wire carries, for voltage drop and rating checks
 }
 
 /** Named frame around components, e.g. a device (ECU, fuse box) the harness plugs into. */
@@ -88,6 +89,7 @@ export interface Part {
 	stripe?: string;
 	insulation?: number; // mm
 	diameter?: number; // mm
+	ampacity?: number; // wire: max current in A, from the datasheet
 	cores?: number; // cable: core count (kept in step with coreList)
 	coreList?: Core[]; // cable: colour and gauge per core; cables using the part take these cores
 	shield?: boolean;
@@ -133,6 +135,8 @@ export interface Harness {
 	currency?: string; // symbol shown with prices
 	lengthUnit?: LengthUnit;
 	gaugeUnit?: GaugeUnit; // unit of gauges typed as a plain number; mm² when unset
+	voltage?: number; // supply voltage in V for drop checks; 12 when unset
+	maxDrop?: number; // allowed voltage drop per wire in % of voltage; 5 when unset
 	hideWireIds?: boolean; // canvas: don't label unnamed wires with their id
 	bundles?: Bundle[];
 	branchPoints?: BranchPoint[];
