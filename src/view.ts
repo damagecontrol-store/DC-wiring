@@ -510,7 +510,7 @@ export class HarnessView extends TextFileView implements Host {
 	/** Copies one library part (and its accessories) into this harness. */
 	addFromLibrary() {
 		const items = [...this.libs].flatMap(([lib, h]) => h.parts.filter(p => p.number).map(part => ({ lib, part })));
-		if (!items.length) return void new Notice("DC Wiring: no part libraries with numbered parts in this vault.");
+		if (!items.length) return void new Notice("DC Wiring: no part libraries with numbered parts in this vault. Run \"Install starter parts library\" for common DT, Superseal and Sumitomo DL connectors.");
 		new LibPartPicker(this.app, items, x => { copyPart(x.part, this.libs.get(x.lib)!, this.h); this.changed(); }).open();
 	}
 

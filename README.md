@@ -70,6 +70,7 @@ Each harness is a `.DC` file. It opens with four tabs:
 - New harness / New part library
 - Open layout beside schematic
 - Add all harness parts to a part library / Add a part from a part library
+- Install starter parts library: Deutsch DT (2–12 way), TE Superseal 1.5 (1–6 way) and Sumitomo DL 090 sealed (1–16 way) housings with their wedgelocks, contacts, seals and plugs, cavity names and a drawn face view. Running it again resets the starter parts and keeps the parts you added. Prices are left at 0. Check the cavity numbering against your housings.
 - Export BOM, connections, wiring tables or cut list (CSV), schematic (SVG), report (HTML), or print the report as PDF
 - Harness settings: units, voltage drop limit and title block (also the **Settings** button)
 - Schematic actions: search, fit, net highlight, IDs, destinations, duplicate, copy, paste, next warning. Give them your own hotkeys under *Settings → Hotkeys*.
@@ -82,7 +83,7 @@ A `.DC` file is plain JSON, so you can keep it in git, compare versions, and let
 ## Limits of 1.0
 
 - Desktop only. Phones and tablets are not supported yet.
-- There is no formboard drawing, bundle thickness calculation or manufacturer parts catalog.
+- There is no formboard drawing or bundle thickness calculation, and no manufacturer parts catalog beyond the starter library.
 - Part images show in the part editor, not on the canvas.
 
 ## Development
