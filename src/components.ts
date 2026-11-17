@@ -1,5 +1,5 @@
 // Pure helpers for schematic editing: labels, cavities, duplicate, move connections, destinations, search.
-import { computeNets, nextId, pinKey, type Component, type End, type Harness, type Kind } from "./model.ts";
+import { computeNets, nextId, parseHarness, pinKey, type Component, type End, type Harness, type Kind, type Part, type Wire } from "./model.ts";
 
 export const PREFIX: Record<Kind, string> = { connector: "C", splice: "S", harness: "H", cable: "CB", terminal: "T", diode: "D", resistor: "R", note: "N" };
 export const TERMINAL_TYPES = ["ferrule", "ring", "spade", "male QC", "female QC", "loose end"];
@@ -82,6 +82,67 @@ export function duplicate(h: Harness, ids: string[]): string[] {
 		h.wires.push(copy);
 	}
 	return [...map.values()];
+}
+
+/** Components on the clipboard, with the wires and mates between them and every part they use. */
+export interface Clip { dcWiring: 1; components: Component[]; wires: Wire[]; mates: { a: string; b: string }[]; parts: Part[] }
+
+export function copyClip(h: Harness, ids: string[]): Clip {
+	const inside = (id: string) => ids.includes(id);
+	const components = h.components.filter(c => inside(c.id));
+	const wires = h.wires.filter(w => inside(w.from.c) && inside(w.to.c));
+	const need = new Set([...components.flatMap(c => [c.partId, ...Object.values(c.contacts ?? {})]), ...wires.map(w => w.partId)].filter((x): x is string => !!x));
+	for (const id of need) for (const cf of h.parts.find(p => p.id === id)?.configurations ?? []) for (const it of cf.items) need.add(it.partId); // accessories come along
+	return structuredClone({ dcWiring: 1, components, wires, mates: (h.mates ?? []).filter(m => inside(m.a) && inside(m.b)), parts: h.parts.filter(p => need.has(p.id)) });
+}
+
+/** The clipboard text as a Clip, or undefined when it is something else. */
+export function readClip(text: string): Clip | undefined {
+	try {
+		const c = JSON.parse(text) as Clip;
+		return c?.dcWiring === 1 && [c.components, c.wires, c.parts].every(Array.isArray) ? { ...c, mates: Array.isArray(c.mates) ? c.mates : [] } : undefined;
+	} catch { return undefined; }
+}
+
+/**
+ * Adds a clip with new ids, its top-left corner at `at`. A part whose number is already in h is shared; others get new ids.
+ * Throws, leaving h untouched, when the clip would make a broken harness. Returns the new component ids.
+ */
+export function pasteClip(h: Harness, clip: Clip, at: { x: number; y: number }): string[] {
+	const t = structuredClone(h);
+	const pid = new Map<string, string>();
+	for (const p of clip.parts) pid.set(p.id, (p.number && t.parts.find(x => x.number === p.number)?.id) || "");
+	const added: Part[] = [];
+	for (const p of clip.parts) if (!pid.get(p.id)) { const id = nextId(t, "P", t.parts); pid.set(p.id, id); const np = { ...structuredClone(p), id }; added.push(np); t.parts.push(np); }
+	const remap = (id?: string) => id && (pid.get(id) ?? id);
+	for (const p of added) for (const cf of p.configurations ?? []) for (const it of cf.items) it.partId = remap(it.partId)!; // h's own parts keep their ids
+	const dx = at.x - Math.min(...clip.components.map(c => c.x)), dy = at.y - Math.min(...clip.components.map(c => c.y));
+	const cid = new Map<string, string>();
+	for (const c of clip.components) {
+		const id = nextId(t, PREFIX[c.kind] ?? "C", t.components);
+		cid.set(c.id, id);
+		const copy: Component = { ...structuredClone(c), id, x: c.x + dx, y: c.y + dy, partId: remap(c.partId) };
+		if (!labelOf(c)) copy.name = id;
+		if (c.contacts) copy.contacts = Object.fromEntries(Object.entries(c.contacts).map(([pin, p]) => [pin, p && remap(p)!]));
+		delete copy.pos; // shortcut: lands at its schematic spot on the Layout; keep a shifted pos if people paste laid-out groups
+		if (!copy.partId) delete copy.partId;
+		t.components.push(copy);
+	}
+	const twists = new Map<string, string>();
+	for (const w of clip.wires) {
+		const a = cid.get(w.from?.c), b = cid.get(w.to?.c);
+		if (!a || !b) continue;
+		const copy: Wire = { ...structuredClone(w), id: nextId(t, "W", t.wires), from: { c: a, pin: w.from.pin }, to: { c: b, pin: w.to.pin }, partId: remap(w.partId) };
+		if (!copy.partId) delete copy.partId;
+		if (copy.points) copy.points = copy.points.map(p => ({ x: p.x + dx, y: p.y + dy }));
+		if (w.twist) copy.twist = twists.get(w.twist) ?? twists.set(w.twist, nextId(t, "TW", t.wires.flatMap(x => x.twist ? [{ id: x.twist }] : []))).get(w.twist);
+		t.wires.push(copy);
+	}
+	const mates = clip.mates.flatMap(m => cid.has(m.a) && cid.has(m.b) ? [{ a: cid.get(m.a)!, b: cid.get(m.b)! }] : []);
+	if (mates.length) t.mates = [...t.mates ?? [], ...mates];
+	parseHarness(JSON.stringify(t)); // throws on a malformed clip
+	Object.assign(h, t);
+	return [...cid.values()];
 }
 
 /** "C2:3", "ECU:A1", "S1" or "ECU" (single pin) -> the pin it names, or an error message. */

@@ -5,7 +5,7 @@ import { Layout, type LayoutSel } from "./layout.ts";
 import { formatLength, parseLength } from "./length.ts";
 import { bom, emptyHarness, isHarnessExt, isLibExt, formatPins, nextId, parseHarness, parsePins, relinkSub, removeComponent, removePart, setContact, signalOf, subBom, syncPorts, type BomRow, type BranchPoint, type Bundle, type Component, type End, type Harness, type Part } from "./model.ts";
 import { NOTE_COLORS, Schematic, type Host, type Selection } from "./schematic.ts";
-import { FormModal, freePath, Picker, type Field } from "./ui.ts";
+import { FormModal, freePath, Picker, showShortcuts, type Field } from "./ui.ts";
 import { coreName, formatCores, parseCores, partCores, setCores, twist, twistedWith, wiresLost } from "./cable.ts";
 import { addToGroup, isLocked, splitGroup, wireLocked } from "./groups.ts";
 import { copyPart, syncStatus } from "./library.ts";
@@ -38,6 +38,8 @@ export class HarnessView extends TextFileView implements Host {
 	libs = new Map<string, Harness>(); // part libraries in the vault, by path
 	private partSort: { key: string; dir: number } = { key: "", dir: 1 };
 	private partFilter = "";
+	private connSort: { key: string; dir: number } = { key: "", dir: 1 };
+	private connFilter = "";
 	private onlySelected = false;
 	private future: string[] = []; // undone states, for redo
 
@@ -219,6 +221,7 @@ export class HarnessView extends TextFileView implements Host {
 			if (mod && k === "z" && !e.shiftKey) { e.preventDefault(); this.undo(); }
 			else if (mod && (k === "y" || k === "z")) { e.preventDefault(); this.redo(); }
 			else if (e.key === "Escape") this.select(null);
+			else if (e.key === "?") showShortcuts(this.app);
 			else if (this.tab === "layout") { if (!mod && (e.key === "Delete" || e.key === "Backspace") && this.lsel) this.layout.remove(this.lsel); }
 			else if (this.tab !== "schematic") return;
 			// delete only where the selection is visible
@@ -443,22 +446,44 @@ export class HarnessView extends TextFileView implements Host {
 
 	get isLib() { return !!this.file && isLibExt(this.file.extension); }
 
-	private editUnits() {
-		new FormModal(this.app, "Units", [
-			{ key: "currency", label: "Currency symbol", value: this.h.currency ?? "" },
-			{ key: "voltage", label: "Supply voltage (V), for voltage drop", value: String(this.h.voltage ?? 12) },
-			{ key: "maxDrop", label: "Allowed voltage drop per wire (%)", value: String(this.h.maxDrop ?? 5) },
-			{ key: "length", label: "Default length unit", value: this.h.lengthUnit ?? "mm", options: Object.fromEntries(Object.keys(LENGTH_UNITS).map(u => [u, u])) },
-			{ key: "gauge", label: "Default gauge unit", value: this.h.gaugeUnit ?? "mm²", options: Object.fromEntries(GAUGE_UNITS.map(u => [u, u])) },
+	/** Everything set once per harness: units, electrical limits and the title block of exports. A library only has units. */
+	editSettings() {
+		const h = this.h, t = h.export ?? {};
+		const TITLE = ["company", "title", "drawing", "date", "drawnBy", "notes"] as const;
+		new FormModal(this.app, this.isLib ? "Library settings" : "Harness settings", [
+			{ key: "currency", label: "Currency symbol", value: h.currency ?? "" },
+			{ key: "length", label: "Default length unit", value: h.lengthUnit ?? "mm", options: Object.fromEntries(Object.keys(LENGTH_UNITS).map(u => [u, u])) },
+			{ key: "gauge", label: "Default gauge unit", value: h.gaugeUnit ?? "mm²", options: Object.fromEntries(GAUGE_UNITS.map(u => [u, u])) },
+			...this.isLib ? [] : [
+				{ key: "voltage", label: "Supply voltage (V), for voltage drop", value: String(h.voltage ?? 12) },
+				{ key: "maxDrop", label: "Allowed voltage drop per wire (%)", value: String(h.maxDrop ?? 5) },
+				{ key: "company", label: "Title block: company", value: t.company ?? "" },
+				{ key: "title", label: "Title block: title (empty: file name)", value: t.title ?? "" },
+				{ key: "drawing", label: "Title block: drawing number", value: t.drawing ?? "" },
+				{ key: "date", label: "Title block: date (empty: today)", value: t.date ?? "" },
+				{ key: "drawnBy", label: "Title block: drawn by", value: t.drawnBy ?? "" },
+				{ key: "notes", label: "Notes on exported drawings", value: t.notes ?? "", multiline: true },
+			],
 		], v => {
-			if (v.currency.trim()) this.h.currency = v.currency.trim(); else delete this.h.currency;
-			const volts = Number(v.voltage), drop = Number(v.maxDrop); // defaults are left out of the file
-			if (volts > 0 && volts !== 12) this.h.voltage = volts; else delete this.h.voltage;
-			if (drop > 0 && drop !== 5) this.h.maxDrop = drop; else delete this.h.maxDrop;
-			if (v.length === "mm") delete this.h.lengthUnit; else this.h.lengthUnit = v.length as LengthUnit;
-			setGaugeUnit(this.h, v.gauge as GaugeUnit);
+			if (v.currency.trim()) h.currency = v.currency.trim(); else delete h.currency;
+			if (v.length === "mm") delete h.lengthUnit; else h.lengthUnit = v.length as LengthUnit;
+			setGaugeUnit(h, v.gauge as GaugeUnit);
+			if (!this.isLib) {
+				const volts = Number(v.voltage), drop = Number(v.maxDrop); // defaults are left out of the file
+				if (volts > 0 && volts !== 12) h.voltage = volts; else delete h.voltage;
+				if (drop > 0 && drop !== 5) h.maxDrop = drop; else delete h.maxDrop;
+				const kept = Object.fromEntries(TITLE.map(k => [k, v[k].trim()]).filter(([, s]) => s));
+				if (Object.keys(kept).length) h.export = kept; else delete h.export;
+			}
 			this.changed();
 		}).open();
+	}
+
+	/** Runs a Schematic action for a command; false (command hidden) when the Schematic isn't showing. */
+	schematicAction(run: (s: Schematic) => unknown, checking: boolean): boolean {
+		if (this.tab !== "schematic" || this.isLib) return false;
+		if (!checking) void run(this.schematic);
+		return true;
 	}
 
 	// --- Part libraries ---
@@ -584,6 +609,13 @@ export class HarnessView extends TextFileView implements Host {
 			if (!this.fitted && this.h.components.length) requestAnimationFrame(() => this.fitInitially());
 		} else if (this.tab === "connections") this.renderConnections();
 		else this.renderParts();
+		this.body.querySelector(".dcw-canvas-hint")?.remove(); // the canvas stays mounted between renders
+		const hint = this.tab === "schematic" && !this.h.components.length
+			? "Right-click the canvas or use + Connector to add parts. Drag from one pin to another to draw a wire. Press ? for all shortcuts."
+			: this.tab === "layout" && !this.h.components.length ? "Add connectors on the Schematic first; they show up here to lay out."
+			: this.tab === "layout" && !this.h.bundles?.length ? "Drag from the dot on one connector to another to lay a bundle between them. Wires then take their length from the bundles."
+			: "";
+		if (hint) this.body.createDiv({ cls: "dcw-canvas-hint", text: hint });
 	}
 
 	private renderBar() {
@@ -620,8 +652,8 @@ export class HarnessView extends TextFileView implements Host {
 				actions.createEl("button", { text: "From library" }).onclick = () => this.addFromLibrary();
 				actions.createEl("button", { text: "All to library" }).onclick = () => this.addAllToLibrary();
 			}
-			actions.createEl("button", { text: "Units" }).onclick = () => this.editUnits();
 		}
+		actions.createEl("button", { text: "Settings", attr: { "aria-label": "Units, voltage drop limit and title block" } }).onclick = () => this.editSettings();
 		actions.createEl("button", { text: "Export" }).onclick = e => exportMenu(this, e);
 		if (this.parents.length) {
 			const up = actions.createSpan({ cls: "dcw-parents", text: "Part of: " });
@@ -635,29 +667,61 @@ export class HarnessView extends TextFileView implements Host {
 	}
 
 	private renderConnections() {
+		const h = this.h;
 		const end = (e: End) => {
-			const c = this.h.components.find(c => c.id === e.c);
+			const c = h.components.find(c => c.id === e.c);
 			if (c?.kind === "harness") return `${c.name} › ${c.ports?.[e.pin - 1] ?? e.pin}`;
 			if (c?.kind === "cable") return `${coreName(c, e.pin)} ${c.name}`;
-			return c ? `${compLabel(this.h, c)} : ${cavName(c, e.pin)}` : `${e.c} : ${e.pin}`;
+			return c ? `${compLabel(h, c)} : ${cavName(c, e.pin)}` : `${e.c} : ${e.pin}`;
 		};
-		const warnings = validate(this.h);
+		const warnings = validate(h);
 		const general = warnings.filter(w => w.kind === "component" && !w.pin);
 		if (general.length) this.body.createDiv({ cls: "dcw-warnings", text: "⚠ " + general.map(w => `${w.id}: ${w.message}`).join(" · ") });
-		const table = this.body.createEl("table", { cls: "dcw-table" });
+		const bar = this.body.createDiv({ cls: "dcw-parts-bar" });
+		const search = bar.createEl("input", { type: "search", cls: "dcw-search", placeholder: "Filter wires: ID, name, end, signal, colour, gauge, part", value: this.connFilter });
+		search.oninput = () => {
+			this.connFilter = search.value;
+			this.render();
+			const s = this.body.querySelector<HTMLInputElement>(".dcw-search");
+			s?.focus();
+			s?.setSelectionRange(s.value.length, s.value.length);
+		};
+		const routes = routeWires(h);
+		const rows = h.wires.map(w => {
+			const eff = effectiveWire(h, w), drop = voltageDrop(h, w, routes);
+			const warn = warnings.filter(x => x.kind === "wire" ? x.id === w.id : x.kind === "component" && [w.from, w.to].some(e => e.c === x.id && e.pin === x.pin)).map(x => x.message);
+			const sort: Record<string, string | number> = { id: w.id, name: w.name ?? "", from: end(w.from), to: end(w.to), signal: signalOf(h, w.from) ?? "",
+				color: eff.color, gauge: eff.gauge, length: routes.get(w.id)?.length ?? w.length, current: w.current ?? 0, drop: drop ?? 0,
+				part: h.parts.find(p => p.id === w.partId)?.number ?? "", warn: warn.join("; ") };
+			return { w, eff, drop, warn, sort };
+		});
+		const f = this.connFilter.trim().toLowerCase();
+		const k = this.connSort.key;
+		const shown = rows
+			.filter(r => !f || ["id", "name", "from", "to", "signal", "color", "gauge", "part"].some(x => String(r.sort[x]).toLowerCase().includes(f)))
+			.sort((a, b) => {
+				if (!k) return 0;
+				const x = a.sort[k], y = b.sort[k];
+				return this.connSort.dir * (typeof x === "number" && typeof y === "number" ? x - y : String(x).localeCompare(String(y), undefined, { numeric: true }));
+			});
+		const table = this.body.createEl("table", { cls: "dcw-table dcw-connections" });
 		const head = table.createEl("tr");
-		for (const t of ["ID", "Name", "From", "To", "Signal", "Colour", "Gauge", "Length (mm)", "Current (A)", "Drop", "Part", "Twisted with", "Warnings", ""]) head.createEl("th", { text: t });
-		const routes = routeWires(this.h);
-		for (const w of this.h.wires) {
+		for (const [key, t] of [["id", "ID"], ["name", "Name"], ["from", "From"], ["to", "To"], ["signal", "Signal"], ["color", "Colour"], ["gauge", "Gauge"],
+			["length", "Length (mm)"], ["current", "Current (A)"], ["drop", "Drop"], ["part", "Part"], ["", "Twisted with"], ["warn", "Warnings"], ["", ""]]) {
+			const sorted = !!key && k === key;
+			const th = head.createEl("th", { text: t + (sorted ? (this.connSort.dir > 0 ? " ▲" : " ▼") : ""), cls: key ? "dcw-sortable" : "" });
+			if (key) th.onclick = () => { this.connSort = { key, dir: sorted ? -this.connSort.dir : 1 }; this.render(); };
+		}
+		for (const { w, eff, drop, warn } of shown) {
 			const tr = table.createEl("tr", { cls: this.sel?.wires?.includes(w.id) ? "is-selected" : "" });
 			tr.onclick = e => { if (!(e.target as HTMLElement).closest("input, select")) this.select({ wires: [w.id] }); };
-			tr.createEl("td", { text: w.id });
+			const id = tr.createEl("td", { cls: "dcw-nowrap", text: w.id });
+			if (warn.length) id.createSpan({ cls: "dcw-warn", text: " ⚠", attr: { title: warn.join("\n") } });
 			const nameIn = tr.createEl("td").createEl("input", { value: w.name ?? "", placeholder: w.id });
 			nameIn.onchange = () => { if (nameIn.value.trim()) w.name = nameIn.value.trim(); else delete w.name; this.changed(); };
-			tr.createEl("td", { text: end(w.from) });
-			tr.createEl("td", { text: end(w.to) });
-			tr.createEl("td", { text: signalOf(this.h, w.from) ?? "" });
-			const eff = effectiveWire(this.h, w);
+			tr.createEl("td", { cls: "dcw-nowrap", text: end(w.from) });
+			tr.createEl("td", { cls: "dcw-nowrap", text: end(w.to) });
+			tr.createEl("td", { cls: "dcw-nowrap", text: signalOf(h, w.from) ?? "" });
 			for (const key of ["color", "gauge", "length"] as const) {
 				const r = key === "length" && routes.get(w.id);
 				if (r) { tr.createEl("td", { text: String(Math.round(r.length)), attr: { title: `Routed through ${r.bundles.join(", ") || "no bundles"}` } }); continue; }
@@ -671,33 +735,32 @@ export class HarnessView extends TextFileView implements Host {
 			}
 			const amps = tr.createEl("td").createEl("input", { value: String(w.current ?? ""), type: "number", attr: { min: "0", step: "any" } });
 			amps.onchange = () => { const a = Number(amps.value); if (a > 0) w.current = a; else delete w.current; this.changed(); };
-			const v = voltageDrop(this.h, w, routes);
-			tr.createEl("td", { cls: "dcw-nowrap", text: v === undefined ? "" : `${v.toFixed(2)} V (${dropPercent(this.h, v).toFixed(1)} %)` });
+			tr.createEl("td", { cls: "dcw-nowrap", text: drop === undefined ? "" : `${drop.toFixed(2)} V (${dropPercent(h, drop).toFixed(1)} %)` });
 			this.partSelect(tr.createEl("td"), w.partId, id => { w.partId = id; this.changed(); });
-			tr.createEl("td", { text: twistedWith(this.h, w.id).join(", ") });
-			tr.createEl("td", { cls: "dcw-warn", text: warnings.filter(x => x.kind === "wire" ? x.id === w.id
-				: x.kind === "component" && [w.from, w.to].some(e => e.c === x.id && e.pin === x.pin)).map(x => x.message).join("; ") });
+			tr.createEl("td", { text: twistedWith(h, w.id).join(", ") });
+			tr.createEl("td", { cls: "dcw-warn", text: warn.join("; ") });
 			const del = tr.createEl("td").createEl("button", { text: "✕", attr: { "aria-label": `Delete ${w.id}` } });
 			del.onclick = e => {
 				e.stopPropagation();
-				this.h.wires = this.h.wires.filter(x => x !== w);
+				h.wires = h.wires.filter(x => x !== w);
 				if (this.sel?.wires?.includes(w.id)) this.sel = null;
 				this.changed();
 			};
 		}
-		// each cable core is a conductor too: its ends are the wires landing on it
-		for (const c of this.h.components) {
+		// each cable core is a conductor too: its ends are the wires landing on it. Not filtered, so hidden while filtering
+		if (!f) for (const c of h.components) {
 			if (c.kind !== "cable") continue;
-			table.createEl("tr", { cls: "dcw-section" }).createEl("td", { text: `Cable ${c.id} ${c.name}`, attr: { colspan: 13 } });
+			table.createEl("tr", { cls: "dcw-section" }).createEl("td", { text: `Cable ${c.id} ${c.name}`, attr: { colspan: 14 } });
 			for (const pin of [...(c.cores ?? []).keys()].map(i => i + 1).concat(c.shield ? [0] : [])) {
-				const ends = this.h.wires.flatMap(w => w.from.c === c.id && w.from.pin === pin ? [w.to] : w.to.c === c.id && w.to.pin === pin ? [w.from] : []);
+				const ends = h.wires.flatMap(w => w.from.c === c.id && w.from.pin === pin ? [w.to] : w.to.c === c.id && w.to.pin === pin ? [w.from] : []);
 				const core = c.cores?.[pin - 1];
 				const tr = table.createEl("tr", { cls: "dcw-readonly" });
 				for (const t of [coreName(c, pin), "", ends[0] ? end(ends[0]) : "", ends.slice(1).map(end).join(", "),
-					signalOf(this.h, { c: c.id, pin }) ?? "", core?.color ?? "shield", core?.gauge ?? "", String(c.length || ""), "", "", this.h.parts.find(p => p.id === c.partId)?.number ?? "", "", ""]) tr.createEl("td", { text: t });
+					signalOf(h, { c: c.id, pin }) ?? "", core?.color ?? "shield", core?.gauge ?? "", String(c.length || ""), "", "", h.parts.find(p => p.id === c.partId)?.number ?? "", "", ""]) tr.createEl("td", { text: t });
 			}
 		}
-		if (!this.h.wires.length) this.body.createDiv({ cls: "dcw-empty", text: "No wires yet. Drag from one pin to another on the Schematic." });
+		if (!h.wires.length) this.body.createDiv({ cls: "dcw-empty", text: "No wires yet. Drag from one pin to another on the Schematic." });
+		else if (!shown.length) this.body.createDiv({ cls: "dcw-empty", text: "No wires match the filter." });
 	}
 
 	private renderParts() {

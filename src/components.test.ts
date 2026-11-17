@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { compLabel, designations, duplicate, matches, mateError, moveConnections, netSignals, parseCavities, pasteSignals, resolveTarget } from "./components.ts";
+import { compLabel, copyClip, designations, duplicate, pasteClip, readClip, matches, mateError, moveConnections, netSignals, parseCavities, pasteSignals, resolveTarget } from "./components.ts";
 import { computeNets, emptyHarness, netWires, parseHarness, removeComponent, signalOf, type Harness } from "./model.ts";
 
 function sample(): Harness {
@@ -119,4 +119,55 @@ test("search matches labels, signals and cavities", () => {
 	assert.ok(matches(h, h.components[0], "vcc"));
 	assert.ok(matches(h, h.components[2], "b"));
 	assert.ok(!matches(h, h.components[1], "ecu"));
+});
+
+test("copy and paste into another harness: new ids, shared parts by number, accessories remapped", () => {
+	const src = emptyHarness();
+	src.parts = [
+		{ id: "P1", number: "HOUSING", manufacturer: "", description: "", price: 1, type: "connector", configurations: [{ name: "Default", items: [{ partId: "P2" }] }] },
+		{ id: "P2", number: "PIN", manufacturer: "", description: "", price: 0.1, type: "contact" },
+		{ id: "P3", number: "FLRY 1", manufacturer: "", description: "", price: 0.2, type: "wire" },
+	];
+	src.components = [
+		{ id: "C1", kind: "connector", name: "ECU", x: 100, y: 100, pins: 2, partId: "P1" },
+		{ id: "C2", kind: "connector", name: "C2", x: 300, y: 100, pins: 2 },
+		{ id: "C3", kind: "connector", name: "Left out", x: 500, y: 100, pins: 1 },
+	];
+	src.wires = [
+		{ id: "W1", from: { c: "C1", pin: 1 }, to: { c: "C2", pin: 1 }, color: "rd", gauge: "1", length: 0, partId: "P3", twist: "TW1" },
+		{ id: "W2", from: { c: "C1", pin: 2 }, to: { c: "C2", pin: 2 }, color: "bk", gauge: "1", length: 0, twist: "TW1" },
+		{ id: "W3", from: { c: "C2", pin: 1 }, to: { c: "C3", pin: 1 }, color: "bk", gauge: "1", length: 0 },
+	];
+	src.mates = [{ a: "C1", b: "C2" }];
+	const clip = readClip(JSON.stringify(copyClip(src, ["C1", "C2"])))!;
+	assert.deepEqual(clip.parts.map(p => p.number), ["HOUSING", "PIN", "FLRY 1"]); // the configuration's contact comes along
+	assert.deepEqual(clip.wires.map(w => w.id), ["W1", "W2"]); // W3 leads out of the selection
+
+	const dst = emptyHarness();
+	dst.parts = [{ id: "P1", number: "PIN", manufacturer: "", description: "", price: 0.1, type: "contact",
+		configurations: [{ name: "Own", items: [{ partId: "P1" }] }] }]; // same id as the clip's housing, different part
+	dst.components = [{ id: "C1", kind: "connector", name: "Existing", x: 0, y: 0, pins: 1 }];
+	const ids = pasteClip(dst, clip, { x: 0, y: 400 });
+	assert.deepEqual(ids, ["C2", "C3"]);
+	const ecu = dst.components.find(c => c.id === "C2")!;
+	assert.deepEqual([ecu.name, ecu.x, ecu.y], ["ECU", 0, 400]);
+	assert.equal(dst.components.find(c => c.id === "C3")!.name, "C3"); // unlabelled stays unlabelled
+	const housing = dst.parts.find(p => p.id === ecu.partId)!;
+	assert.equal(housing.number, "HOUSING");
+	assert.equal(housing.configurations![0].items[0].partId, "P1"); // PIN already existed as P1
+	assert.equal(dst.parts.filter(p => p.number === "PIN").length, 1);
+	assert.equal(dst.parts[0].configurations![0].items[0].partId, "P1"); // dst's own part untouched
+	assert.deepEqual(dst.wires.map(w => [w.from.c, w.to.c]), [["C2", "C3"], ["C2", "C3"]]);
+	assert.equal(dst.parts.find(p => p.id === dst.wires[0].partId)!.number, "FLRY 1");
+	assert.ok(dst.wires[0].twist && dst.wires[0].twist === dst.wires[1].twist);
+	assert.deepEqual(dst.mates, [{ a: "C2", b: "C3" }]);
+});
+
+test("paste refuses clipboard text that isn't a clip, and a broken clip leaves the harness alone", () => {
+	assert.equal(readClip("hello"), undefined);
+	assert.equal(readClip(JSON.stringify({ components: [] })), undefined);
+	const h = emptyHarness(), before = JSON.stringify(h);
+	const bad = { dcWiring: 1 as const, components: [{ id: "X", kind: "rocket", name: "", x: 0, y: 0, pins: 1 }], wires: [], mates: [], parts: [] };
+	assert.throws(() => pasteClip(h, bad as never, { x: 0, y: 0 }));
+	assert.equal(JSON.stringify(h), before);
 });

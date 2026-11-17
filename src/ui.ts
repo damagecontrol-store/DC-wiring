@@ -74,3 +74,39 @@ export class Picker<T> extends FuzzySuggestModal<T> {
 	getItemText(t: T) { return this.text(t); }
 	onChooseItem(t: T) { this.done(t); }
 }
+
+const SHORTCUTS: [string, [string, string][]][] = [
+	["Schematic keys", [
+		["Space", "Search components"], ["F", "Fit to view"], ["N", "Highlight the whole net or only direct wires"], ["I", "Show component IDs"],
+		["D", "Destinations: type where each cavity of the selected connector goes"], ["Arrow keys", "Nudge the selection"],
+		["Mod D", "Duplicate"], ["Mod C / Mod V", "Copy and paste components, also into another harness"],
+		["Delete, Backspace or X", "Delete the selection"], ["Mod Z / Mod Shift Z", "Undo / redo"], ["Esc", "Clear the selection"], ["?", "This list"],
+	]],
+	["Schematic mouse", [
+		["Right-click", "On the canvas: add components. On a component or wire: edit, assign a part, delete"], ["Drag pin to pin", "Draw a wire"],
+		["Mod-drag from a pin", "Move that pin's wires to another pin"], ["Drag a connector's small square onto another", "Mate the two connectors"],
+		["Double-click a wire", "Add a bend point; double-click the point to remove it"], ["Double-click a component", "Edit it"],
+		["Shift-click / Shift-drag", "Add to the selection / box select"], ["Drag the canvas, middle-drag", "Pan"], ["Pinch or Mod-scroll", "Zoom"],
+	]],
+	["Layout", [
+		["Drag from a connector's dot to another", "Lay a bundle"], ["Double-click a bundle", "Add a bend point"], ["Double-click a bundle's length", "Edit the bundle"],
+		["Delete or Backspace", "Delete the selected bundle or branch point"],
+	]],
+];
+
+/** Every key and mouse gesture, in one list (the ? key and the "Show shortcuts" command). */
+export function showShortcuts(app: App) {
+	const m = new Modal(app);
+	m.titleEl.setText("DC Wiring shortcuts");
+	const mod = navigator.platform.startsWith("Mac") ? "⌘" : "Ctrl";
+	for (const [title, rows] of SHORTCUTS) {
+		m.contentEl.createEl("h4", { text: title });
+		const t = m.contentEl.createEl("table", { cls: "dcw-shortcuts" });
+		for (const [k, what] of rows) {
+			const tr = t.createEl("tr");
+			tr.createEl("td").createEl("kbd", { text: k.replace(/Mod/g, mod) });
+			tr.createEl("td", { text: what });
+		}
+	}
+	m.open();
+}

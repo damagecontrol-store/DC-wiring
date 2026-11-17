@@ -1,5 +1,5 @@
 import { Menu, Notice } from "obsidian";
-import { cavName, compLabel, duplicate, labelOf, matches, mateError, moveConnections, netSignals, PREFIX, resolveTarget, selComps } from "./components.ts";
+import { cavName, compLabel, copyClip, duplicate, pasteClip, readClip, labelOf, matches, mateError, moveConnections, netSignals, PREFIX, resolveTarget, selComps } from "./components.ts";
 import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, wireLabel, type Component, type End, type Harness, type Wire } from "./model.ts";
 import { routeWires } from "./bundles.ts";
 import { formatLength } from "./length.ts";
@@ -141,9 +141,10 @@ export class Schematic {
 	key(e: KeyboardEvent): boolean {
 		const k = e.key.toLowerCase(), ids = selComps(this.host.sel), h = this.host.h;
 		if (e.metaKey || e.ctrlKey) {
-			if (k !== "d") return false;
-			const copies = duplicate(h, ids);
-			if (copies.length) { this.host.sel = copies.length > 1 ? { components: copies } : { component: copies[0] }; this.host.changed(); }
+			if (k === "d") this.duplicateSelection();
+			else if (k === "c" && ids.length) void this.copy();
+			else if (k === "v") void this.paste();
+			else return false;
 			return true;
 		}
 		if (e.altKey) return false;
@@ -156,16 +157,43 @@ export class Schematic {
 		else if (k === "n") this.toggle("net");
 		else if (k === "i") this.toggle("ids");
 		else if (k === "d") this.toggle("dest");
-		else if (k === " ") {
-			this.search.removeClass("is-hidden");
-			const input = this.search.querySelector("input")!;
-			input.focus();
-			input.select();
-		} else return false;
+		else if (k === " ") this.openSearch();
+		else return false;
 		return true;
 	}
 
-	private toggle(k: "net" | "ids" | "dest") {
+	openSearch() {
+		this.search.removeClass("is-hidden");
+		const input = this.search.querySelector("input")!;
+		input.focus();
+		input.select();
+	}
+
+	duplicateSelection() {
+		const copies = duplicate(this.host.h, selComps(this.host.sel));
+		if (copies.length) { this.host.sel = copies.length > 1 ? { components: copies } : { component: copies[0] }; this.host.changed(); }
+	}
+
+	/** Puts the selected components, the wires between them and their parts on the clipboard. */
+	async copy() {
+		const ids = selComps(this.host.sel);
+		if (!ids.length) return void new Notice("DC Wiring: select components to copy.");
+		await navigator.clipboard.writeText(JSON.stringify(copyClip(this.host.h, ids)));
+		new Notice(`DC Wiring: copied ${ids.length} component${ids.length > 1 ? "s" : ""}.`);
+	}
+
+	/** Pastes copied components into the middle of the view, with new ids. Parts with the same number are shared, not added twice. */
+	async paste() {
+		const clip = readClip(await navigator.clipboard.readText());
+		if (!clip) return void new Notice("DC Wiring: the clipboard holds no copied components.");
+		let ids: string[];
+		try { ids = pasteClip(this.host.h, clip, this.center()); }
+		catch (e) { return void new Notice(`DC Wiring: can't paste (${(e as Error).message}).`); }
+		this.host.sel = ids.length > 1 ? { components: ids } : ids.length ? { component: ids[0] } : null;
+		this.host.changed();
+	}
+
+	toggle(k: "net" | "ids" | "dest") {
 		this.opts[k] = !this.opts[k];
 		this.render();
 	}
@@ -196,7 +224,7 @@ export class Schematic {
 		this.applyView();
 	}
 
-	private warnAt = -1;
+	private warnAt = -1; // which warning "next warning" showed last
 	/** Selects the next warning on the canvas, centres on it and says what it is. */
 	nextWarning() {
 		const h = this.host.h, ws = canvasWarnings(h);
