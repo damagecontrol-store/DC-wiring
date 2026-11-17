@@ -1,6 +1,6 @@
 import { Menu, Notice } from "obsidian";
-import { cavName, compLabel, copyClip, duplicate, pasteClip, readClip, labelOf, matches, mateError, moveConnections, netSignals, PREFIX, resolveTarget, selComps } from "./components.ts";
-import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, wireLabel, type Component, type End, type Harness, type Wire } from "./model.ts";
+import { addLibConnector, cavName, compLabel, copyClip, duplicate, pasteClip, readClip, labelOf, matches, mateError, moveConnections, netSignals, PREFIX, resolveTarget, selComps } from "./components.ts";
+import { computeNets, nextId, netWires, pinKey, portLabel, removeComponent, wireLabel, type Component, type End, type Harness, type Part, type Wire } from "./model.ts";
 import { routeWires } from "./bundles.ts";
 import { formatLength } from "./length.ts";
 import { effectiveWire, loadedParts } from "./parts.ts";
@@ -34,6 +34,7 @@ export interface Host {
 	subs: Map<string, Harness>; // loaded sub-harness files by vault path
 	openSub(c: Component): void;
 	addSub(x: number, y: number): void;
+	addConnector(x?: number, y?: number): void; // blank, or a housing from a library in the harness's folder
 	// groups, twisted wires, images
 	editGroup(id: string): void;
 	pickGroup(c: Component): void;
@@ -785,7 +786,7 @@ export class Schematic {
 			}));
 		} else {
 			const p = this.world(e);
-			m.addItem(i => i.setTitle("Add connector").setIcon("plug").onClick(() => this.add("connector", p.x, p.y)));
+			m.addItem(i => i.setTitle("Add connector").setIcon("plug").onClick(() => this.host.addConnector(p.x, p.y)));
 			m.addItem(i => i.setTitle("Add terminal").setIcon("circle-dot").onClick(() => this.add("terminal", p.x, p.y)));
 			m.addItem(i => i.setTitle("Add splice").setIcon("git-merge").onClick(() => this.add("splice", p.x, p.y)));
 			m.addItem(i => i.setTitle("Add cable").setIcon("cable").onClick(() => this.addCable(p.x, p.y)));
@@ -820,6 +821,13 @@ export class Schematic {
 		// name = id means "no label"; the label is set in the edit dialog
 		h.components.push({ id, kind, name: id, x: snap(x), y: snap(y), pins, ...kind === "terminal" ? { terminal: "ring" } : {} });
 		this.host.sel = { component: id };
+		this.host.changed();
+	}
+
+	/** A connector for a library housing, at (x, y) or a free spot in view. */
+	addFromLib(lib: Harness, part: Part, config: string | undefined, x?: number, y?: number) {
+		if (x === undefined || y === undefined) ({ x, y } = this.center());
+		this.host.sel = { component: addLibConnector(this.host.h, lib, part, config, snap(x), snap(y)) };
 		this.host.changed();
 	}
 

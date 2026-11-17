@@ -177,6 +177,20 @@ export class HarnessView extends TextFileView implements Host {
 		new Picker(this.app, `Twist ${wireId} with`, others, w => `${w.id} ${w.name ?? ""} ${w.color}`, w => { twist(this.h, [wireId, w.id]); this.changed(); }).open();
 	}
 
+	/** Pick a connector housing from the part libraries in this harness's folder; with none there, add a blank one. */
+	addConnector(x?: number, y?: number) {
+		const dir = this.file?.parent?.path;
+		const items = [...this.libs].filter(([path]) => this.app.vault.getFileByPath(path)?.parent?.path === dir)
+			.flatMap(([lib, h]) => h.parts.filter(p => p.type === "connector" && p.number).flatMap(part => {
+				const cfs = part.configurations ?? [];
+				return cfs.length > 1 ? cfs.map(cf => ({ lib, part, config: cf.name as string | undefined })) : [{ lib, part, config: undefined }];
+			}));
+		if (!items.length) return this.schematic.add("connector", x, y);
+		new Picker(this.app, "Add a connector: pick a housing from this folder's part library", [null, ...items],
+			t => t ? `${t.part.number} · ${t.part.description}${t.config ? ` · ${t.config}` : ""} · ${t.part.cavities ?? "?"} cav` : "Blank connector (4 pins)",
+			t => t ? this.schematic.addFromLib(this.libs.get(t.lib)!, t.part, t.config, x, y) : this.schematic.add("connector", x, y)).open();
+	}
+
 	addImage(x: number, y: number) {
 		const files = this.app.vault.getFiles().filter(f => ["png", "jpg", "jpeg", "gif", "svg", "webp", "bmp", "avif"].includes(f.extension.toLowerCase()));
 		new Picker(this.app, "Choose an image from the vault", files, f => f.path, f => {
@@ -629,7 +643,7 @@ export class HarnessView extends TextFileView implements Host {
 		}
 		const actions = this.bar.createDiv("dcw-actions");
 		if (this.tab === "schematic") {
-			actions.createEl("button", { text: "+ Connector" }).onclick = () => this.schematic.add("connector");
+			actions.createEl("button", { text: "+ Connector" }).onclick = () => this.addConnector();
 			actions.createEl("button", { text: "+ Splice" }).onclick = () => this.schematic.add("splice");
 			actions.createEl("button", { text: "+ Cable" }).onclick = () => this.schematic.addCable();
 			actions.createEl("button", { text: "+ Sub-harness" }).onclick = () => { const p = this.schematic.center(); this.addSub(p.x, p.y); };

@@ -1,5 +1,7 @@
 // Pure helpers for schematic editing: labels, cavities, duplicate, move connections, destinations, search.
 import { computeNets, nextId, parseHarness, pinKey, type Component, type End, type Harness, type Kind, type Part, type Wire } from "./model.ts";
+import { copyPart } from "./library.ts";
+import { assignPart } from "./parts.ts";
 
 export const PREFIX: Record<Kind, string> = { connector: "C", splice: "S", harness: "H", cable: "CB", terminal: "T", diode: "D", resistor: "R", note: "N" };
 export const TERMINAL_TYPES = ["ferrule", "ring", "spade", "male QC", "female QC", "loose end"];
@@ -179,3 +181,17 @@ export function mateError(h: Harness, m: { a: string; b: string }): string | und
 
 /** Component ids in a selection, whether it holds one or many. */
 export const selComps = (sel: { component?: string; components?: string[] } | null) => sel?.components ?? (sel?.component ? [sel.component] : []);
+
+/**
+ * Places a connector for a library housing: its cavity count and names, the part (and configuration) assigned.
+ * The harness's own part with that number is used when there is one, so its local edits stay; otherwise the part
+ * and its accessories are copied in. Returns the new component's id.
+ */
+export function addLibConnector(h: Harness, lib: Harness, part: Part, config: string | undefined, x: number, y: number): string {
+	const partId = h.parts.find(p => p.number === part.number)?.id ?? copyPart(part, lib, h);
+	const id = nextId(h, "C", h.components);
+	const c: Component = { id, kind: "connector", name: id, x, y, pins: part.cavities || 4 };
+	h.components.push(c);
+	assignPart(h, [c], partId, config);
+	return id;
+}
