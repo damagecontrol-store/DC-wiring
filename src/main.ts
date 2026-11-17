@@ -1,4 +1,5 @@
-import { Platform, Plugin, TFile, TFolder } from "obsidian";
+import { Notice, Platform, Plugin, TFile, TFolder } from "obsidian";
+import { installStarter, STARTER_DIR, STARTER_LIB } from "./starter.ts";
 import { emptyHarness, parseHarness, relinkSub, isHarnessExt } from "./model.ts";
 import { EXPORTS } from "./output.ts";
 import type { Schematic } from "./schematic.ts";
@@ -58,6 +59,7 @@ export default class DCWiringPlugin extends Plugin {
 		};
 		this.addCommand({ id: "add-parts-to-library", name: "Add all harness parts to a part library", checkCallback: inHarness(v => v.addAllToLibrary()) });
 		this.addCommand({ id: "add-part-from-library", name: "Add a part from a part library", checkCallback: inHarness(v => v.addFromLibrary()) });
+		this.addCommand({ id: "install-starter-library", name: "Install starter parts library (DT, Superseal, Sumitomo DL)", callback: () => this.installStarter() });
 		// keep sub-harness links working when a harness file is renamed or moved
 		this.registerEvent(this.app.vault.on("rename", async (file, oldPath) => {
 			if (!(file instanceof TFile) || !isHarnessExt(file.extension)) return;
@@ -76,6 +78,29 @@ export default class DCWiringPlugin extends Plugin {
 		this.registerEvent(this.app.workspace.on("file-menu", (menu, file) => {
 			if (file instanceof TFolder) menu.addItem(i => i.setTitle("New harness").setIcon("cable").onClick(() => this.create(file)));
 		}));
+	}
+
+	/** Writes the starter library and its face images; a library already there keeps the user's own parts. */
+	private async installStarter() {
+		const vault = this.app.vault;
+		const file = vault.getFileByPath(STARTER_LIB);
+		let existing;
+		try {
+			if (file) existing = parseHarness(await vault.read(file));
+		} catch (e) {
+			return void new Notice(`DC Wiring: ${STARTER_LIB} can't be read (${(e as Error).message}); nothing was changed.`);
+		}
+		for (const dir of [STARTER_DIR, `${STARTER_DIR}/images`]) if (!vault.getFolderByPath(dir)) await vault.createFolder(dir);
+		const { lib, images } = installStarter(existing);
+		const write = async (path: string, text: string) => {
+			const f = vault.getFileByPath(path);
+			return f ? (await vault.modify(f, text), f) : vault.create(path, text);
+		};
+		for (const [path, svg] of Object.entries(images)) await write(path, svg);
+		const out = await write(STARTER_LIB, JSON.stringify(lib, null, "\t"));
+		new Notice(`DC Wiring: starter library installed, ${lib.parts.length} parts.${existing ? " Starter parts were reset; your own parts were kept." : ""}`);
+		const open = this.app.workspace.getLeavesOfType(VIEW_TYPE).find(l => (l.view as HarnessView).file === out);
+		if (open) this.app.workspace.setActiveLeaf(open, { focus: true }); else await this.app.workspace.getLeaf(true).openFile(out);
 	}
 
 	private async create(folder?: TFolder, ext = "DC") {
