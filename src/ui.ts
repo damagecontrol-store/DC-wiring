@@ -1,4 +1,4 @@
-import { App, FuzzySuggestModal, Modal, normalizePath, Setting } from "obsidian";
+import { App, FuzzySuggestModal, Modal, normalizePath, renderMatches, Setting, type FuzzyMatch, type SearchMatches } from "obsidian";
 
 export interface Field {
 	key: string;
@@ -64,15 +64,28 @@ export function freePath(app: App, dir: string, name: string, ext = "DC"): strin
 	}
 }
 
-/** Fuzzy list to pick one item from. */
+/** Fuzzy list to pick one item from, optionally with a picture and a smaller second line of details per row. */
 export class Picker<T> extends FuzzySuggestModal<T> {
-	constructor(app: App, placeholder: string, private items: T[], private text: (t: T) => string, private done: (t: T) => void) {
+	constructor(app: App, placeholder: string, private items: T[], private text: (t: T) => string, private done: (t: T) => void,
+		private image?: (t: T) => string | undefined, private detail?: (t: T) => string) {
 		super(app);
 		this.setPlaceholder(placeholder);
 	}
 	getItems() { return this.items; }
-	getItemText(t: T) { return this.text(t); }
+	// search covers both lines: the title, a space, then the details
+	getItemText(t: T) { const d = this.detail?.(t); return d ? `${this.text(t)} ${d}` : this.text(t); }
 	onChooseItem(t: T) { this.done(t); }
+	renderSuggestion(m: FuzzyMatch<T>, el: HTMLElement) {
+		const src = this.image?.(m.item), detail = this.detail?.(m.item);
+		if (!src && !detail) return super.renderSuggestion(m, el);
+		el.addClass("dcw-suggest-rich");
+		if (src) el.createEl("img", { attr: { src, alt: "" } });
+		const box = el.createDiv(), title = this.text(m.item), cut = title.length + 1;
+		const part = (a: number, b: number, shift: number): SearchMatches =>
+			m.match.matches.filter(([s, e]) => s < b && e > a).map(([s, e]) => [Math.max(s, a) - shift, Math.min(e, b) - shift]);
+		renderMatches(box.createDiv(), title, part(0, title.length, 0));
+		if (detail) renderMatches(box.createDiv({ cls: "dcw-suggest-detail" }), detail, part(cut, cut + detail.length, cut));
+	}
 }
 
 const SHORTCUTS: [string, [string, string][]][] = [

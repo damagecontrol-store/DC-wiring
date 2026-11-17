@@ -152,6 +152,10 @@
 .dcw-table td.dcw-specs { color: var(--text-muted); white-space: nowrap; }
 .dcw-table tr.is-picked td { background: var(--background-modifier-hover); }
 .dcw-part-image { display: block; max-width: 100%; max-height: 220px; margin: 4px auto 12px; border-radius: var(--radius-s); }
+/* picker rows with a part picture, e.g. + Connector */
+.dcw-suggest-rich { display: flex; align-items: center; gap: var(--size-4-3); }
+.dcw-suggest-detail { font-size: var(--font-ui-smaller); color: var(--text-muted); margin-top: 2px; }
+.dcw-suggest-rich img { flex: none; height: 56px; width: 92px; object-fit: contain; border-radius: var(--radius-s); background: var(--background-secondary); }
 .dcw-table td.dcw-nowrap { white-space: nowrap; }
 .dcw-label-bg { fill: var(--background-primary); opacity: 0.85; }
 

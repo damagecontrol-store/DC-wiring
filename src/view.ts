@@ -187,8 +187,10 @@ export class HarnessView extends TextFileView implements Host {
 			}));
 		if (!items.length) return this.schematic.add("connector", x, y);
 		new Picker(this.app, "Add a connector: pick a housing from this folder's part library", [null, ...items],
-			t => t ? `${t.part.number} · ${t.part.description}${t.config ? ` · ${t.config}` : ""} · ${t.part.cavities ?? "?"} cav` : "Blank connector (4 pins)",
-			t => t ? this.schematic.addFromLib(this.libs.get(t.lib)!, t.part, t.config, x, y) : this.schematic.add("connector", x, y)).open();
+			t => t ? `${t.part.description || t.part.number}${t.config ? ` — ${t.config}` : ""}` : "Blank connector",
+			t => t ? this.schematic.addFromLib(this.libs.get(t.lib)!, t.part, t.config, x, y) : this.schematic.add("connector", x, y),
+			t => t?.part.image ? this.imageSrc(t.part.image) : undefined,
+			t => t ? [t.part.number, t.part.manufacturer, t.part.cavities ? `${t.part.cavities} cavities` : ""].filter(Boolean).join(" · ") : "4 pins, assign a part later").open();
 	}
 
 	addImage(x: number, y: number) {
