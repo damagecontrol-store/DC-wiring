@@ -21,6 +21,7 @@ export const PART_TYPES: Record<PartType, { label: string; fields: PartField[] }
 		{ key: "stripe", label: "Stripe" },
 		{ key: "insulation", label: "Insulation (mm)", kind: "number" },
 		{ key: "diameter", label: "Diameter (mm)", kind: "number" },
+		{ key: "ampacity", label: "Max current (A)", kind: "number" },
 	] },
 	cable: { label: "Cables", fields: [
 		{ key: "coreList", label: "Cores: colour and gauge, comma separated (e.g. rd 0.5, bk/wh 0.5)", kind: "cores" },

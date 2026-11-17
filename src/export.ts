@@ -4,6 +4,7 @@ import { coreName } from "./cable.ts";
 import { cavName, compLabel, labelOf } from "./components.ts";
 import { bom, computeNets, signalOf, type BomRow, type Component, type End, type Harness, type Wire } from "./model.ts";
 import { effectiveWire } from "./parts.ts";
+import { voltageDrop } from "./validate.ts";
 
 type Cell = string | number | undefined;
 
@@ -50,8 +51,11 @@ const partNo = (h: Harness, id?: string) => h.parts.find(p => p.id === id)?.numb
 /** Every wire with both ends and their signals. */
 export function connectionsTable(h: Harness): Cell[][] {
 	const nets = computeNets(h), routes = routeWires(h);
-	return [["Wire", "Name", "From", "From signal", "To", "To signal", "Colour", "Gauge", "Length (mm)", "Part"],
-		...h.wires.map(w => { const o = wireOut(h, w, routes); return [w.id, w.name, endLabel(h, w.from), signalOf(h, w.from, nets), endLabel(h, w.to), signalOf(h, w.to, nets), o.color, o.gauge, o.length, partNo(h, w.partId)]; })];
+	return [["Wire", "Name", "From", "From signal", "To", "To signal", "Colour", "Gauge", "Length (mm)", "Current (A)", "Drop (V)", "Part"],
+		...h.wires.map(w => {
+			const o = wireOut(h, w, routes), v = voltageDrop(h, w, routes);
+			return [w.id, w.name, endLabel(h, w.from), signalOf(h, w.from, nets), endLabel(h, w.to), signalOf(h, w.to, nets), o.color, o.gauge, o.length, w.current, v === undefined ? undefined : Number(v.toFixed(2)), partNo(h, w.partId)];
+		})];
 }
 
 export interface WiringRow { cavity: string; signal: string; destination: string; wire: string; color: string; gauge: string; length: number | "" }

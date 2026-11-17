@@ -22,6 +22,8 @@
 		"currency": { "type": "string", "description": "Symbol shown with prices." },
 		"lengthUnit": { "enum": ["mm", "cm", "m", "in", "ft", "yd"], "description": "Unit lengths are shown in; stored values stay in mm." },
 		"gaugeUnit": { "enum": ["mm²", "AWG", "cmil", "kcmil"], "description": "Unit of gauges typed as a plain number. mm² when unset." },
+		"voltage": { "type": "number", "exclusiveMinimum": 0, "description": "Supply voltage in V for voltage drop. 12 when unset." },
+		"maxDrop": { "type": "number", "exclusiveMinimum": 0, "description": "Allowed voltage drop per wire in % of voltage. 5 when unset." },
 		"hideWireIds": { "type": "boolean", "description": "Canvas: don't label unnamed wires with their id." },
 		"seq": { "type": "object", "additionalProperties": { "type": "integer" }, "description": "Last id number handed out per prefix. Ids are never reused." },
 		"export": {
@@ -99,7 +101,8 @@
 				"partId": { "type": "string" },
 				"points": { "type": "array", "items": { "$ref": "#/$defs/point" } },
 				"twist": { "type": "string", "description": "Twist group id (TW1)." },
-				"ident": { "type": "object", "properties": { "label": { "type": "string" }, "colors": { "type": "array", "items": { "type": "string" } } } }
+				"ident": { "type": "object", "properties": { "label": { "type": "string" }, "colors": { "type": "array", "items": { "type": "string" } } } },
+				"current": { "type": "number", "exclusiveMinimum": 0, "description": "Current in A, for the voltage drop and rating checks." }
 			}
 		},
 		"configuration": {
@@ -139,6 +142,7 @@
 				"gauge": { "type": "string" },
 				"stripe": { "type": "string" },
 				"insulation": { "type": "number" },
+				"ampacity": { "type": "number", "exclusiveMinimum": 0, "description": "Wire part: max current in A, from the datasheet." },
 				"diameter": { "type": "number" },
 				"cores": { "type": "integer", "minimum": 1 },
 				"coreList": { "type": "array", "items": { "$ref": "#/$defs/core" } },

@@ -18,7 +18,7 @@ Each harness is a `.DC` file. It opens with four tabs:
   - Bundles with lengths and branch points.
   - Wire lengths follow the bundles they run through.
   - Add coverings such as corrugated tube, tape or heat shrink.
-- **Connections**: the wiring list. From, to, colour, gauge, length and part for every wire.
+- **Connections**: the wiring list. From, to, colour, gauge, length, current, voltage drop and part for every wire.
 - **Parts**: the bill of materials. Counted from what you assigned, priced, and grouped by part type.
 
 | Layout | Parts |
@@ -45,6 +45,8 @@ Each harness is a `.DC` file. It opens with four tabs:
 - Choose a contact per cavity by hand when needed.
 - Part libraries (`.DClib`) are shared between harnesses, with push and pull to keep parts in step.
 - Checks: wrong cavity count, contact doesn't fit the wire gauge, duplicate part number, wire without a part.
+
+**Electrical checks.** Type the current a wire carries and see its voltage drop, worked out from the gauge and the routed length. You get a warning when the drop goes over the limit you set (5 % of 12 V by default) or the current goes over the wire part's rating.
 
 **Units.** mm², AWG, cmil and kcmil gauges, with conversion. Lengths in mm, cm, m, in, ft or yd, and you can type sums like `40 + 30 + 2 * 15cm`.
 
